@@ -9,12 +9,6 @@ class K9CoreResourceProvider(private val context: Context) : CoreResourceProvide
     override fun defaultSignature(): String = context.getString(R.string.default_signature)
     override fun defaultIdentityDescription(): String = context.getString(R.string.default_identity_description)
 
-    override fun internalStorageProviderName(): String =
-        context.getString(R.string.local_storage_provider_internal_label)
-
-    override fun externalStorageProviderName(): String =
-        context.getString(R.string.local_storage_provider_external_label)
-
     override fun contactDisplayNamePrefix(): String = context.getString(R.string.message_to_label)
     override fun contactUnknownSender(): String = context.getString(R.string.unknown_sender)
     override fun contactUnknownRecipient(): String = context.getString(R.string.unknown_recipient)
@@ -37,8 +31,6 @@ class K9CoreResourceProvider(private val context: Context) : CoreResourceProvide
     override fun replyHeader(sender: String, sentDate: String): String =
         context.getString(R.string.message_compose_reply_header_fmt_with_date, sentDate, sender)
 
-    override fun searchAllMessagesTitle(): String = context.getString(R.string.search_all_messages_title)
-    override fun searchAllMessagesDetail(): String = context.getString(R.string.search_all_messages_detail)
     override fun searchUnifiedInboxTitle(): String = context.getString(R.string.integrated_inbox_title)
     override fun searchUnifiedInboxDetail(): String = context.getString(R.string.integrated_inbox_detail)
 

@@ -120,15 +120,6 @@ object K9 : EarlyInit {
     var k9Language = ""
 
     @JvmStatic
-    var appTheme = AppTheme.FOLLOW_SYSTEM
-
-    var messageViewTheme = SubTheme.USE_GLOBAL
-    var messageComposeTheme = SubTheme.USE_GLOBAL
-
-    @JvmStatic
-    var isFixedMessageViewTheme = true
-
-    @JvmStatic
     val fontSizes = FontSizes()
 
     @JvmStatic
@@ -156,9 +147,6 @@ object K9 : EarlyInit {
     var isConfirmMarkAllRead = true
 
     @JvmStatic
-    var notificationHideSubject = NotificationHideSubject.NEVER
-
-    @JvmStatic
     var notificationQuickDeleteBehaviour = NotificationQuickDelete.ALWAYS
 
     @JvmStatic
@@ -183,7 +171,7 @@ object K9 : EarlyInit {
     var isChangeContactNameColor = false
 
     @JvmStatic
-    var contactNameColor = 0xff00008f.toInt()
+    var contactNameColor = 0xFF1093F5.toInt()
 
     @JvmStatic
     var isShowContactPicture = true
@@ -271,7 +259,8 @@ object K9 : EarlyInit {
                 return false
             }
 
-            val quietTimeChecker = QuietTimeChecker(Clock.INSTANCE, quietTimeStarts, quietTimeEnds)
+            val clock = DI.get<Clock>()
+            val quietTimeChecker = QuietTimeChecker(clock, quietTimeStarts, quietTimeEnds)
             return quietTimeChecker.isQuietTime
         }
 
@@ -326,7 +315,7 @@ object K9 : EarlyInit {
         isShowContactName = storage.getBoolean("showContactName", false)
         isShowContactPicture = storage.getBoolean("showContactPicture", true)
         isChangeContactNameColor = storage.getBoolean("changeRegisteredNameColor", false)
-        contactNameColor = storage.getInt("registeredNameColor", -0xffff71)
+        contactNameColor = storage.getInt("registeredNameColor", 0xFF1093F5.toInt())
         isUseMessageViewFixedWidthFont = storage.getBoolean("messageViewFixedWidthFont", false)
         isMessageViewReturnToList = storage.getBoolean("messageViewReturnToList", false)
         isMessageViewShowNext = storage.getBoolean("messageViewShowNext", false)
@@ -345,7 +334,6 @@ object K9 : EarlyInit {
         val sortAscendingSetting = storage.getBoolean("sortAscending", Account.DEFAULT_SORT_ASCENDING)
         sortAscending[sortType] = sortAscendingSetting
 
-        notificationHideSubject = storage.getEnum("notificationHideSubject", NotificationHideSubject.NEVER)
         notificationQuickDeleteBehaviour = storage.getEnum("notificationQuickDelete", NotificationQuickDelete.ALWAYS)
 
         lockScreenNotificationVisibility = storage.getEnum(
@@ -373,12 +361,6 @@ object K9 : EarlyInit {
         pgpSignOnlyDialogCounter = storage.getInt("pgpSignOnlyDialogCounter", 0)
 
         k9Language = storage.getString("language", "")
-
-        appTheme = storage.getEnum("theme", AppTheme.FOLLOW_SYSTEM)
-
-        messageViewTheme = storage.getEnum("messageViewTheme", SubTheme.USE_GLOBAL)
-        messageComposeTheme = storage.getEnum("messageComposeTheme", SubTheme.USE_GLOBAL)
-        isFixedMessageViewTheme = storage.getBoolean("fixedMessageViewTheme", true)
     }
 
     internal fun save(editor: StorageEditor) {
@@ -411,10 +393,6 @@ object K9 : EarlyInit {
         editor.putBoolean("hideTimeZone", isHideTimeZone)
 
         editor.putString("language", k9Language)
-        editor.putEnum("theme", appTheme)
-        editor.putEnum("messageViewTheme", messageViewTheme)
-        editor.putEnum("messageComposeTheme", messageComposeTheme)
-        editor.putBoolean("fixedMessageViewTheme", isFixedMessageViewTheme)
 
         editor.putBoolean("confirmDelete", isConfirmDelete)
         editor.putBoolean("confirmDiscardMessage", isConfirmDiscardMessage)
@@ -426,7 +404,6 @@ object K9 : EarlyInit {
         editor.putEnum("sortTypeEnum", sortType)
         editor.putBoolean("sortAscending", sortAscending[sortType] ?: false)
 
-        editor.putString("notificationHideSubject", notificationHideSubject.toString())
         editor.putString("notificationQuickDelete", notificationQuickDeleteBehaviour.toString())
         editor.putString("lockScreenNotificationVisibility", lockScreenNotificationVisibility.toString())
 
@@ -506,29 +483,8 @@ object K9 : EarlyInit {
     const val MAIL_SERVICE_WAKE_LOCK_TIMEOUT = 60000
     const val BOOT_RECEIVER_WAKE_LOCK_TIMEOUT = 60000
 
-    enum class AppTheme {
-        LIGHT,
-        DARK,
-        FOLLOW_SYSTEM
-    }
-
-    enum class SubTheme {
-        LIGHT,
-        DARK,
-        USE_GLOBAL
-    }
-
     enum class BACKGROUND_OPS {
         ALWAYS, NEVER, WHEN_CHECKED_AUTO_SYNC
-    }
-
-    /**
-     * Controls when to hide the subject in the notification area.
-     */
-    enum class NotificationHideSubject {
-        ALWAYS,
-        WHEN_LOCKED,
-        NEVER
     }
 
     /**
@@ -555,15 +511,5 @@ object K9 : EarlyInit {
         ALWAYS,
         NEVER,
         WHEN_IN_LANDSCAPE
-    }
-
-    object Intents {
-        object Share {
-            lateinit var EXTRA_FROM: String
-        }
-
-        internal fun init(packageName: String) {
-            Share.EXTRA_FROM = "$packageName.intent.extra.SENDER"
-        }
     }
 }

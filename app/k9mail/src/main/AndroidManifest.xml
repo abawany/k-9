@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:installLocation="auto"
     package="com.fsck.k9">
 
@@ -23,23 +24,7 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-
-    <permission
-        android:name="${applicationId}.permission.READ_MESSAGES"
-        android:description="@string/read_messages_desc"
-        android:label="@string/read_messages_label"
-        android:permissionGroup="android.permission-group.MESSAGES"
-        android:protectionLevel="dangerous"/>
-    <uses-permission android:name="${applicationId}.permission.READ_MESSAGES"/>
-
-    <permission
-        android:name="${applicationId}.permission.DELETE_MESSAGES"
-        android:description="@string/delete_messages_desc"
-        android:label="@string/delete_messages_label"
-        android:permissionGroup="android.permission-group.MESSAGES"
-        android:protectionLevel="dangerous"/>
-    <uses-permission android:name="${applicationId}.permission.DELETE_MESSAGES"/>
-
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
 
     <application
         android:name="com.fsck.k9.App"
@@ -50,7 +35,10 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.K9.Startup"
         android:resizeableActivity="true"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        tools:replace="android:theme"
+        tools:ignore="UnusedAttribute">
 
         <meta-data
             android:name="android.app.default_searchable"
@@ -178,7 +166,10 @@
             android:targetActivity=".activity.MessageList"
             android:exported="true" />
 
-        <activity android:name=".activity.MessageList">
+        <activity
+            android:name=".activity.MessageList"
+            android:launchMode="singleTop"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
 
@@ -203,7 +194,7 @@
             android:name=".activity.MessageCompose"
             android:configChanges="locale"
             android:enabled="false"
-            android:label="@string/app_name">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.SENDTO"/>
                 <data android:scheme="mailto"/>
@@ -241,7 +232,8 @@
             android:name=".activity.Search"
             android:configChanges="locale"
             android:label="@string/search_action"
-            android:uiOptions="splitActionBarWhenNarrow">
+            android:uiOptions="splitActionBarWhenNarrow"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEARCH"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -254,14 +246,17 @@
         <activity
             android:name=".activity.LauncherShortcuts"
             android:configChanges="locale"
-            android:label="@string/shortcuts_title">
+            android:label="@string/shortcuts_title"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.CREATE_SHORTCUT"/>
                 <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
         </activity>
 
-        <activity android:name=".widget.unread.UnreadWidgetConfigurationActivity">
+        <activity
+            android:name=".widget.unread.UnreadWidgetConfigurationActivity"
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
             </intent-filter>
@@ -308,33 +303,10 @@
         </activity>
 
         <receiver
-            android:name=".service.StorageReceiver"
-            android:enabled="true">
-            <intent-filter>
-                <!--
-                android.intent.action.MEDIA_MOUNTED
-
-                     * Broadcast Action:  External media is present and mounted at its mount point.
-                     * The path to the mount point for the removed media is contained in the Intent.mData field.
-                     * The Intent contains an extra with name "read-only" and Boolean value to indicate if the
-                     * media was mounted read only.
-
-                 -->
-                <action android:name="android.intent.action.MEDIA_MOUNTED"/>
-                <!--
-
-                MEDIA_EJECT and MEDIA_UNMOUNTED are not defined here: they have to be dynamically registered
-                otherwise it would make K-9 start at the wrong time
-
-                 -->
-                <data android:scheme="file"/>
-            </intent-filter>
-        </receiver>
-
-        <receiver
             android:name=".provider.UnreadWidgetProvider"
             android:icon="@drawable/ic_launcher"
-            android:label="@string/unread_widget_label">
+            android:label="@string/unread_widget_label"
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
             </intent-filter>
@@ -346,7 +318,8 @@
         <receiver
             android:name=".widget.list.MessageListWidgetProvider"
             android:icon="@drawable/message_list_widget_preview"
-            android:label="@string/mail_list_widget_text">
+            android:label="@string/mail_list_widget_text"
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
@@ -380,7 +353,8 @@
 
         <service
             android:name="com.fsck.k9.directshare.K9ChooserTargetService"
-            android:permission="android.permission.BIND_CHOOSER_TARGET_SERVICE" >
+            android:permission="android.permission.BIND_CHOOSER_TARGET_SERVICE"
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.service.chooser.ChooserTargetService" />
             </intent-filter>
@@ -421,11 +395,7 @@
         <provider
             android:name=".external.MessageProvider"
             android:authorities="${applicationId}.messageprovider"
-            android:exported="true"
-            android:grantUriPermissions="true"
-            android:multiprocess="true"
-            android:readPermission="${applicationId}.permission.READ_MESSAGES"
-            android:writePermission="${applicationId}.permission.DELETE_MESSAGES"/>
+            android:exported="false" />
 
         <provider
             android:name=".provider.EmailProvider"

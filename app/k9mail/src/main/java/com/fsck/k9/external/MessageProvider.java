@@ -152,10 +152,6 @@ public class MessageProvider extends ContentProvider {
         for (Account account : Preferences.getPreferences(getContext()).getAccounts()) {
             if (account.getAccountNumber() == accountId) {
                 myAccount = account;
-                if (!account.isAvailable(getContext())) {
-                    Timber.w("not deleting messages because account is unavailable at the moment");
-                    return 0;
-                }
             }
         }
 
@@ -164,7 +160,7 @@ public class MessageProvider extends ContentProvider {
         }
 
         if (myAccount != null) {
-            MessageReference messageReference = new MessageReference(myAccount.getUuid(), folderId, msgUid, null);
+            MessageReference messageReference = new MessageReference(myAccount.getUuid(), folderId, msgUid);
             MessagingController controller = MessagingController.getInstance(getContext());
             controller.deleteMessage(messageReference);
         }
@@ -412,7 +408,7 @@ public class MessageProvider extends ContentProvider {
     public static class AccountExtractor implements FieldExtractor<MessageInfoHolder, String> {
         @Override
         public String getField(MessageInfoHolder source) {
-            return source.message.getAccount().getDescription();
+            return source.message.getAccount().getDisplayName();
         }
     }
 
@@ -482,16 +478,12 @@ public class MessageProvider extends ContentProvider {
         }
 
         protected MatrixCursor getMessages(String[] projection) throws InterruptedException {
-            BlockingQueue<List<MessageInfoHolder>> queue = new SynchronousQueue<>();
-
             // new code for integrated inbox, only execute this once as it will be processed afterwards via the listener
             SearchAccount integratedInboxAccount = SearchAccount.createUnifiedInboxAccount();
             MessagingController msgController = MessagingController.getInstance(getContext());
 
-            msgController.searchLocalMessages(integratedInboxAccount.getRelatedSearch(),
-                    new MessageInfoHolderRetrieverListener(queue));
-
-            List<MessageInfoHolder> holders = queue.take();
+            List<LocalMessage> messages = msgController.searchLocalMessages(integratedInboxAccount.getRelatedSearch());
+            List<MessageInfoHolder> holders = convertToMessageInfoHolder(messages);
 
             // TODO add sort order parameter
             Collections.sort(holders, new ReverseDateComparator());
@@ -523,6 +515,20 @@ public class MessageProvider extends ContentProvider {
             }
 
             return cursor;
+        }
+
+        private List<MessageInfoHolder> convertToMessageInfoHolder(List<LocalMessage> messages) {
+            List<MessageInfoHolder> holders = new ArrayList<>();
+
+            Context context = getContext();
+            for (LocalMessage message : messages) {
+                Account messageAccount = message.getAccount();
+                MessageInfoHolder messageInfoHolder = MessageInfoHolder.create(context, message, messageAccount);
+
+                holders.add(messageInfoHolder);
+            }
+
+            return holders;
         }
 
         protected LinkedHashMap<String, FieldExtractor<MessageInfoHolder, ?>> resolveMessageExtractors(
@@ -603,7 +609,7 @@ public class MessageProvider extends ContentProvider {
                     if (AccountColumns.ACCOUNT_NUMBER.equals(field)) {
                         values[fieldIndex] = account.getAccountNumber();
                     } else if (AccountColumns.ACCOUNT_NAME.equals(field)) {
-                        values[fieldIndex] = account.getDescription();
+                        values[fieldIndex] = account.getDisplayName();
                     } else if (AccountColumns.ACCOUNT_UUID.equals(field)) {
                         values[fieldIndex] = account.getUuid();
                     } else if (AccountColumns.ACCOUNT_COLOR.equals(field)) {
@@ -661,12 +667,12 @@ public class MessageProvider extends ContentProvider {
 
             Context context = getContext();
             MessagingController controller = MessagingController.getInstance(context);
-            Collection<Account> accounts = Preferences.getPreferences(context).getAvailableAccounts();
+            Collection<Account> accounts = Preferences.getPreferences(context).getAccounts();
 
             for (Account account : accounts) {
                 if (account.getAccountNumber() == accountNumber) {
                     myAccount = account;
-                    values[0] = myAccount.getDescription();
+                    values[0] = myAccount.getDisplayName();
                     values[1] = controller.getUnreadMessageCount(account);
                     cursor.addRow(values);
                 }
@@ -1035,40 +1041,6 @@ public class MessageProvider extends ContentProvider {
             }, 30, TimeUnit.SECONDS);
 
             return wrapped;
-        }
-    }
-
-    /**
-     * Synchronized listener used to retrieve {@link MessageInfoHolder}s using a given {@link BlockingQueue}.
-     */
-    protected class MessageInfoHolderRetrieverListener extends SimpleMessagingListener {
-        private final BlockingQueue<List<MessageInfoHolder>> queue;
-        private List<MessageInfoHolder> holders = new ArrayList<>();
-
-
-        public MessageInfoHolderRetrieverListener(BlockingQueue<List<MessageInfoHolder>> queue) {
-            this.queue = queue;
-        }
-
-        @Override
-        public void listLocalMessagesAddMessages(Account account, String folderServerId, List<LocalMessage> messages) {
-            Context context = getContext();
-
-            for (LocalMessage message : messages) {
-                Account messageAccount = message.getAccount();
-                MessageInfoHolder messageInfoHolder = MessageInfoHolder.create(context, message, messageAccount);
-
-                holders.add(messageInfoHolder);
-            }
-        }
-
-        @Override
-        public void listLocalMessagesFinished() {
-            try {
-                queue.put(holders);
-            } catch (InterruptedException e) {
-                Timber.e(e, "Unable to return message list back to caller");
-            }
         }
     }
 }

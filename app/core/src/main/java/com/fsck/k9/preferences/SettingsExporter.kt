@@ -10,12 +10,14 @@ import com.fsck.k9.AccountPreferenceSerializer.Companion.IDENTITY_EMAIL_KEY
 import com.fsck.k9.AccountPreferenceSerializer.Companion.IDENTITY_NAME_KEY
 import com.fsck.k9.Preferences
 import com.fsck.k9.mailstore.FolderRepository
+import com.fsck.k9.notification.NotificationSettingsUpdater
 import com.fsck.k9.preferences.ServerTypeConverter.fromServerSettingsType
 import com.fsck.k9.preferences.Settings.InvalidSettingValueException
 import com.fsck.k9.preferences.Settings.SettingsDescription
 import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Locale
 import org.xmlpull.v1.XmlSerializer
 import timber.log.Timber
 
@@ -23,16 +25,29 @@ class SettingsExporter(
     private val contentResolver: ContentResolver,
     private val preferences: Preferences,
     private val folderSettingsProvider: FolderSettingsProvider,
-    private val folderRepository: FolderRepository
+    private val folderRepository: FolderRepository,
+    private val notificationSettingsUpdater: NotificationSettingsUpdater
 ) {
     @Throws(SettingsImportExportException::class)
     fun exportToUri(includeGlobals: Boolean, accountUuids: Set<String>, uri: Uri) {
+        updateNotificationSettings(accountUuids)
+
         try {
             contentResolver.openOutputStream(uri)!!.use { outputStream ->
                 exportPreferences(outputStream, includeGlobals, accountUuids)
             }
         } catch (e: Exception) {
             throw SettingsImportExportException(e)
+        }
+    }
+
+    private fun updateNotificationSettings(accountUuids: Set<String>) {
+        try {
+            notificationSettingsUpdater.updateNotificationSettings(accountUuids)
+        } catch (e: Exception) {
+            // An error here could mean we export notification settings that don't reflect the current configuration
+            // of the notification channels. But we prefer stale data over failing the export.
+            Timber.w(e, "Error while updating accounts with notification configuration from system")
         }
     }
 
@@ -256,7 +271,7 @@ class SettingsExporter(
                     Timber.w(
                         "Account setting \"%s\" (%s) has invalid value \"%s\" in preference storage. " +
                             "This shouldn't happen!",
-                        keyPart, account.description, valueString
+                        keyPart, account, valueString
                     )
                 }
             }
@@ -268,17 +283,29 @@ class SettingsExporter(
         folderRepository: FolderRepository,
         serializer: XmlSerializer
     ) {
-        fun writeFolderNameSetting(key: String, folderId: Long?, importedFolderServerId: String?) {
+        fun writeFolderNameSetting(
+            key: String,
+            folderId: Long?,
+            importedFolderServerId: String?,
+            writeEmptyValue: Boolean = false
+        ) {
             val folderServerId = folderId?.let {
                 folderRepository.getFolderServerId(account, folderId)
             } ?: importedFolderServerId
 
             if (folderServerId != null) {
                 writeAccountSettingIfValid(serializer, key, folderServerId, account)
+            } else if (writeEmptyValue) {
+                writeAccountSettingIfValid(serializer, key, valueString = "", account)
             }
         }
 
-        writeFolderNameSetting("autoExpandFolderName", account.autoExpandFolderId, account.importedAutoExpandFolder)
+        writeFolderNameSetting(
+            "autoExpandFolderName",
+            account.autoExpandFolderId,
+            account.importedAutoExpandFolder,
+            writeEmptyValue = true
+        )
         writeFolderNameSetting("archiveFolderName", account.archiveFolderId, account.importedArchiveFolder)
         writeFolderNameSetting("draftsFolderName", account.draftsFolderId, account.importedDraftsFolder)
         writeFolderNameSetting("sentFolderName", account.sentFolderId, account.importedSentFolder)
@@ -433,7 +460,7 @@ class SettingsExporter(
 
     fun generateDatedExportFileName(): String {
         val now = Calendar.getInstance()
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd")
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         return String.format("%s_%s.%s", EXPORT_FILENAME_PREFIX, dateFormat.format(now.time), EXPORT_FILENAME_SUFFIX)
     }
 

@@ -23,8 +23,10 @@ import com.fsck.k9.Account.SpecialFolderSelection;
 import com.fsck.k9.AccountPreferenceSerializer;
 import com.fsck.k9.DI;
 import com.fsck.k9.K9;
+import com.fsck.k9.NotificationLight;
 import com.fsck.k9.core.R;
 import com.fsck.k9.mailstore.StorageManager;
+import com.fsck.k9.notification.NotificationLightDecoder;
 import com.fsck.k9.preferences.Settings.BooleanSetting;
 import com.fsck.k9.preferences.Settings.ColorSetting;
 import com.fsck.k9.preferences.Settings.EnumSetting;
@@ -35,6 +37,7 @@ import com.fsck.k9.preferences.Settings.SettingsDescription;
 import com.fsck.k9.preferences.Settings.SettingsUpgrader;
 import com.fsck.k9.preferences.Settings.StringSetting;
 import com.fsck.k9.preferences.Settings.V;
+import kotlin.collections.SetsKt;
 
 
 public class AccountSettingsDescriptions {
@@ -60,7 +63,8 @@ public class AccountSettingsDescriptions {
                 new V(53, new StringSetting(null))
         ));
         s.put("autoExpandFolderName", Settings.versions(
-                new V(1, new StringSetting("INBOX"))
+                new V(1, new StringSetting("INBOX")),
+                new V(78, new StringSetting(null))
         ));
         s.put("automaticCheckIntervalMinutes", Settings.versions(
                 new V(1, new IntegerResourceSetting(-1, R.array.check_frequency_values)),
@@ -105,10 +109,12 @@ public class AccountSettingsDescriptions {
                 new V(74, new IntegerResourceSetting(24, R.array.idle_refresh_period_values))
         ));
         s.put("led", Settings.versions(
-                new V(1, new BooleanSetting(true))
+                new V(1, new BooleanSetting(true)),
+                new V(80, null)
         ));
         s.put("ledColor", Settings.versions(
-                new V(1, new ColorSetting(0xFF0000FF))
+                new V(1, new ColorSetting(0xFF0000FF)),
+                new V(80, null)
         ));
         s.put("localStorageProvider", Settings.versions(
                 new V(1, new StorageProviderSetting())
@@ -216,10 +222,7 @@ public class AccountSettingsDescriptions {
                 new V(1, new IntegerResourceSetting(0, R.array.vibrate_pattern_values))
         ));
         s.put("vibrateTimes", Settings.versions(
-                new V(1, new IntegerResourceSetting(5, R.array.vibrate_times_label))
-        ));
-        s.put("allowRemoteSearch", Settings.versions(
-                new V(18, new BooleanSetting(true))
+                new V(1, new IntegerRangeSetting(1, 10, 5))
         ));
         s.put("remoteSearchNumResults", Settings.versions(
                 new V(18, new IntegerResourceSetting(AccountPreferenceSerializer.DEFAULT_REMOTE_SEARCH_NUM_RESULTS,
@@ -264,6 +267,9 @@ public class AccountSettingsDescriptions {
         s.put("ignoreChatMessages", Settings.versions(
                 new V(76, new BooleanSetting(false))
         ));
+        s.put("notificationLight", Settings.versions(
+                new V(80, new EnumSetting<>(NotificationLight.class, NotificationLight.Disabled))
+        ));
         // note that there is no setting for openPgpProvider, because this will have to be set up together
         // with the actual provider after import anyways.
 
@@ -273,6 +279,7 @@ public class AccountSettingsDescriptions {
         u.put(53, new SettingsUpgraderV53());
         u.put(54, new SettingsUpgraderV54());
         u.put(74, new SettingsUpgraderV74());
+        u.put(80, new SettingsUpgraderV80());
 
         UPGRADERS = Collections.unmodifiableMap(u);
     }
@@ -413,8 +420,8 @@ public class AccountSettingsDescriptions {
         @Override
         public String fromString(String value) {
             StorageManager storageManager = StorageManager.getInstance(context);
-            Map<String, String> providers = storageManager.getAvailableProviders();
-            if (providers.containsKey(value)) {
+            Set<String> providers = storageManager.getAvailableProviders();
+            if (providers.contains(value)) {
                 return value;
             }
             throw new RuntimeException("Validation failed");
@@ -513,6 +520,30 @@ public class AccountSettingsDescriptions {
             }
 
             return null;
+        }
+    }
+
+    /**
+     * Upgrades settings from version 79 to 80
+     *
+     * Rewrites 'led' and 'lecColor' to 'notificationLight'.
+     */
+    private static class SettingsUpgraderV80 implements SettingsUpgrader {
+        private final NotificationLightDecoder notificationLightDecoder = DI.get(NotificationLightDecoder.class);
+
+        @Override
+        public Set<String> upgrade(Map<String, Object> settings) {
+            Boolean isLedEnabled = (Boolean) settings.get("led");
+            Integer ledColor = (Integer) settings.get("ledColor");
+            Integer chipColor = (Integer) settings.get("chipColor");
+
+            if (isLedEnabled != null && ledColor != null) {
+                int accountColor = chipColor != null ? chipColor : 0;
+                NotificationLight light = notificationLightDecoder.decode(isLedEnabled, ledColor, accountColor);
+                settings.put("notificationLight", light.name());
+            }
+
+            return SetsKt.setOf("led", "ledColor");
         }
     }
 }

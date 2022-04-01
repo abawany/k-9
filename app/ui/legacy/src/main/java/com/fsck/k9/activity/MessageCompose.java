@@ -67,6 +67,8 @@ import com.fsck.k9.activity.compose.PgpInlineDialog.OnOpenPgpInlineChangeListene
 import com.fsck.k9.activity.compose.PgpSignOnlyDialog.OnOpenPgpSignOnlyChangeListener;
 import com.fsck.k9.activity.compose.RecipientMvpView;
 import com.fsck.k9.activity.compose.RecipientPresenter;
+import com.fsck.k9.activity.compose.ReplyToPresenter;
+import com.fsck.k9.activity.compose.ReplyToView;
 import com.fsck.k9.activity.compose.SaveMessageTask;
 import com.fsck.k9.activity.misc.Attachment;
 import com.fsck.k9.autocrypt.AutocryptDraftStateHeaderParser;
@@ -201,6 +203,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
 
     // relates to the message being replied to, forwarded, or edited TODO split up?
     private MessageReference relatedMessageReference;
+    private Flag relatedFlag = null;
     /**
      * Indicates that the source message has been processed at least once and should not
      * be processed on any subsequent loads. This protects us from adding attachments that
@@ -211,6 +214,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
 
     private RecipientPresenter recipientPresenter;
     private MessageBuilder currentMessageBuilder;
+    private ReplyToPresenter replyToPresenter;
     private boolean finishAfterDraftSaved;
     private boolean alreadyNotifiedUserOfEmptySubject = false;
     private boolean changesMadeSinceLastSave = false;
@@ -306,6 +310,9 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         chooseIdentityButton = findViewById(R.id.identity);
         chooseIdentityButton.setOnClickListener(this);
 
+        ReplyToView replyToView = new ReplyToView(this);
+        replyToPresenter = new ReplyToPresenter(replyToView);
+
         RecipientMvpView recipientMvpView = new RecipientMvpView(this);
         ComposePgpInlineDecider composePgpInlineDecider = new ComposePgpInlineDecider();
         ComposePgpEnableByDefaultDecider composePgpEnableByDefaultDecider = new ComposePgpEnableByDefaultDecider();
@@ -349,6 +356,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
             }
         };
 
+        replyToView.addTextChangedListener(draftNeedsChangingTextWatcher);
         recipientMvpView.addTextChangedListener(draftNeedsChangingTextWatcher);
         quotedMessageMvpView.addTextChangedListener(draftNeedsChangingTextWatcher);
 
@@ -419,6 +427,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         requestReadReceipt = account.isMessageReadReceipt();
 
         updateFrom();
+        replyToPresenter.setIdentity(identity);
 
         if (!relatedMessageProcessed) {
             if (action == Action.REPLY || action == Action.REPLY_ALL ||
@@ -439,7 +448,9 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         }
 
         if (action == Action.REPLY || action == Action.REPLY_ALL) {
-            relatedMessageReference = relatedMessageReference.withModifiedFlag(Flag.ANSWERED);
+            relatedFlag = Flag.ANSWERED;
+        } else if (action == Action.FORWARD || action == Action.FORWARD_AS_ATTACHMENT) {
+            relatedFlag = Flag.FORWARDED;
         }
 
         if (action == Action.REPLY || action == Action.REPLY_ALL ||
@@ -451,14 +462,11 @@ public class MessageCompose extends K9Activity implements OnClickListener,
             recipientMvpView.requestFocusOnToField();
         }
 
-        if (action == Action.FORWARD || action == Action.FORWARD_AS_ATTACHMENT) {
-            relatedMessageReference = relatedMessageReference.withModifiedFlag(Flag.FORWARDED);
-        }
-
         updateMessageFormat();
 
         // Set font size of input controls
         int fontSize = K9.getFontSizes().getMessageComposeInput();
+        replyToView.setFontSizes(K9.getFontSizes(), fontSize);
         recipientMvpView.setFontSizes(K9.getFontSizes(), fontSize);
         quotedMessageMvpView.setFontSizes(K9.getFontSizes(), fontSize);
         K9.getFontSizes().setViewTextSize(subjectView, fontSize);
@@ -626,6 +634,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         outState.putBoolean(STATE_KEY_CHANGES_MADE_SINCE_LAST_SAVE, changesMadeSinceLastSave);
         outState.putBoolean(STATE_ALREADY_NOTIFIED_USER_OF_EMPTY_SUBJECT, alreadyNotifiedUserOfEmptySubject);
 
+        replyToPresenter.onSaveInstanceState(outState);
         recipientPresenter.onSaveInstanceState(outState);
         quotedMessagePresenter.onSaveInstanceState(outState);
         attachmentPresenter.onSaveInstanceState(outState);
@@ -647,6 +656,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
 
         requestReadReceipt = savedInstanceState.getBoolean(STATE_KEY_READ_RECEIPT);
 
+        replyToPresenter.onRestoreInstanceState(savedInstanceState);
         recipientPresenter.onRestoreInstanceState(savedInstanceState);
         quotedMessagePresenter.onRestoreInstanceState(savedInstanceState);
         attachmentPresenter.onRestoreInstanceState(savedInstanceState);
@@ -710,6 +720,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
                 .setReferences(referencedMessageIds)
                 .setRequestReadReceipt(requestReadReceipt)
                 .setIdentity(identity)
+                .setReplyTo(replyToPresenter.getAddresses())
                 .setMessageFormat(currentMessageFormat)
                 .setText(CrLfConverter.toCrLf(messageContentView.getText()))
                 .setAttachments(attachmentPresenter.getAttachments())
@@ -732,6 +743,10 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         if (subjectView.getText().length() == 0 && !alreadyNotifiedUserOfEmptySubject) {
             Toast.makeText(this, R.string.empty_subject, Toast.LENGTH_LONG).show();
             alreadyNotifiedUserOfEmptySubject = true;
+            return;
+        }
+
+        if (replyToPresenter.isNotReadyForSending()) {
             return;
         }
 
@@ -920,6 +935,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         updateFrom();
         updateSignature();
         updateMessageFormat();
+        replyToPresenter.setIdentity(identity);
         recipientPresenter.onSwitchIdentity(identity);
     }
 
@@ -942,6 +958,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         int id = v.getId();
         if (id == R.id.message_content || id == R.id.subject) {
             if (hasFocus) {
+                replyToPresenter.onNonRecipientFieldFocused();
                 recipientPresenter.onNonRecipientFieldFocused();
             }
         }
@@ -1355,6 +1372,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         draftMessageId = messagingController.getId(message);
         subjectView.setText(messageViewInfo.subject);
 
+        replyToPresenter.initFromDraftMessage(message);
         recipientPresenter.initFromDraftMessage(message);
 
         // Read In-Reply-To header from draft
@@ -1430,6 +1448,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
 
         updateSignature();
         updateFrom();
+        replyToPresenter.setIdentity(identity);
 
         quotedMessagePresenter.processDraftMessage(messageViewInfo, k9identity);
     }
@@ -1443,10 +1462,11 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         final Long draftId;
         final String plaintextSubject;
         final MessageReference messageReference;
+        final Flag flag;
 
         SendMessageTask(MessagingController messagingController, Preferences preferences, Account account,
                 Contacts contacts, Message message, Long draftId, String plaintextSubject,
-                MessageReference messageReference) {
+                MessageReference messageReference, Flag flag) {
             this.messagingController = messagingController;
             this.preferences = preferences;
             this.account = account;
@@ -1455,6 +1475,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
             this.draftId = draftId;
             this.plaintextSubject = plaintextSubject;
             this.messageReference = messageReference;
+            this.flag = flag;
         }
 
         @Override
@@ -1463,7 +1484,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
                 contacts.markAsContacted(message.getRecipients(RecipientType.TO));
                 contacts.markAsContacted(message.getRecipients(RecipientType.CC));
                 contacts.markAsContacted(message.getRecipients(RecipientType.BCC));
-                updateReferencedMessage();
+                addFlagToReferencedMessage();
             } catch (Exception e) {
                 Timber.e(e, "Failed to mark contact as contacted.");
             }
@@ -1480,13 +1501,12 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         /**
          * Set the flag on the referenced message(indicated we replied / forwarded the message)
          **/
-        private void updateReferencedMessage() {
-            if (messageReference != null && messageReference.getFlag() != null) {
+        private void addFlagToReferencedMessage() {
+            if (messageReference != null && flag != null) {
                 String accountUuid = messageReference.getAccountUuid();
                 Account account = preferences.getAccount(accountUuid);
                 long folderId = messageReference.getFolderId();
                 String sourceMessageUid = messageReference.getUid();
-                Flag flag = messageReference.getFlag();
 
                 Timber.d("Setting referenced message (%d, %s) flag to %s", folderId, sourceMessageUid, flag);
 
@@ -1580,7 +1600,7 @@ public class MessageCompose extends K9Activity implements OnClickListener,
         } else {
             currentMessageBuilder = null;
             new SendMessageTask(messagingController, preferences, account, contacts, message,
-                    draftMessageId, plaintextSubject, relatedMessageReference).execute();
+                    draftMessageId, plaintextSubject, relatedMessageReference, relatedFlag).execute();
             finish();
         }
     }

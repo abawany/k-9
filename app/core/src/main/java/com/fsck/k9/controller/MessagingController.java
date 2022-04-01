@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.os.PowerManager;
 import android.os.Process;
 import android.os.SystemClock;
 
@@ -61,12 +60,12 @@ import com.fsck.k9.mail.Flag;
 import com.fsck.k9.mail.FolderClass;
 import com.fsck.k9.mail.Message;
 import com.fsck.k9.mail.MessageDownloadState;
-import com.fsck.k9.mail.MessageRetrievalListener;
 import com.fsck.k9.mail.MessagingException;
 import com.fsck.k9.mail.Part;
 import com.fsck.k9.mail.ServerSettings;
+import com.fsck.k9.mail.power.PowerManager;
+import com.fsck.k9.mail.power.WakeLock;
 import com.fsck.k9.mailstore.FolderDetailsAccessor;
-import com.fsck.k9.mailstore.ListenableMessageStore;
 import com.fsck.k9.mailstore.LocalFolder;
 import com.fsck.k9.mailstore.LocalMessage;
 import com.fsck.k9.mailstore.LocalStore;
@@ -78,11 +77,9 @@ import com.fsck.k9.mailstore.OutboxStateRepository;
 import com.fsck.k9.mailstore.SaveMessageData;
 import com.fsck.k9.mailstore.SaveMessageDataCreator;
 import com.fsck.k9.mailstore.SendState;
-import com.fsck.k9.mailstore.UnavailableStorageException;
+import com.fsck.k9.mailstore.SpecialLocalFoldersCreator;
 import com.fsck.k9.notification.NotificationController;
 import com.fsck.k9.notification.NotificationStrategy;
-import com.fsck.k9.power.TracingPowerManager;
-import com.fsck.k9.power.TracingPowerManager.TracingWakeLock;
 import com.fsck.k9.search.LocalSearch;
 import com.fsck.k9.search.SearchAccount;
 import org.jetbrains.annotations.NotNull;
@@ -121,6 +118,7 @@ public class MessagingController {
     private final Preferences preferences;
     private final MessageStoreManager messageStoreManager;
     private final SaveMessageDataCreator saveMessageDataCreator;
+    private final SpecialLocalFoldersCreator specialLocalFoldersCreator;
 
     private final Thread controllerThread;
 
@@ -130,6 +128,7 @@ public class MessagingController {
     private final MemorizingMessagingListener memorizingMessagingListener = new MemorizingMessagingListener();
     private final MessageCountsProvider messageCountsProvider;
     private final DraftOperations draftOperations;
+    private final NotificationOperations notificationOperations;
 
 
     private MessagingListener checkMailListener = null;
@@ -145,7 +144,8 @@ public class MessagingController {
             NotificationStrategy notificationStrategy, LocalStoreProvider localStoreProvider,
             MessageCountsProvider messageCountsProvider, BackendManager backendManager,
             Preferences preferences, MessageStoreManager messageStoreManager,
-            SaveMessageDataCreator saveMessageDataCreator, List<ControllerExtension> controllerExtensions) {
+            SaveMessageDataCreator saveMessageDataCreator, SpecialLocalFoldersCreator specialLocalFoldersCreator,
+            List<ControllerExtension> controllerExtensions) {
         this.context = context;
         this.notificationController = notificationController;
         this.notificationStrategy = notificationStrategy;
@@ -155,6 +155,7 @@ public class MessagingController {
         this.preferences = preferences;
         this.messageStoreManager = messageStoreManager;
         this.saveMessageDataCreator = saveMessageDataCreator;
+        this.specialLocalFoldersCreator = specialLocalFoldersCreator;
 
         controllerThread = new Thread(new Runnable() {
             @Override
@@ -169,6 +170,7 @@ public class MessagingController {
         initializeControllerExtensions(controllerExtensions);
 
         draftOperations = new DraftOperations(this, messageStoreManager, saveMessageDataCreator);
+        notificationOperations = new NotificationOperations(notificationController, preferences, messageStoreManager);
     }
 
     private void initializeControllerExtensions(List<ControllerExtension> controllerExtensions) {
@@ -217,23 +219,7 @@ public class MessagingController {
                             command.sequence,
                             command.isForegroundPriority ? "foreground" : "background");
 
-                    try {
-                        command.runnable.run();
-                    } catch (UnavailableAccountException e) {
-                        // retry later
-                        new Thread() {
-                            @Override
-                            public void run() {
-                                try {
-                                    sleep(30 * 1000);
-                                    queuedCommands.put(command);
-                                } catch (InterruptedException e) {
-                                    Timber.e("Interrupted while putting a pending command for an unavailable account " +
-                                            "back into the queue. THIS SHOULD NEVER HAPPEN.");
-                                }
-                            }
-                        }.start();
-                    }
+                    command.runnable.run();
 
                     Timber.i(" Command '%s' completed", command.description);
                 }
@@ -280,13 +266,17 @@ public class MessagingController {
         try {
             return localStoreProvider.getInstance(account);
         } catch (MessagingException e) {
-            throw new IllegalStateException("Couldn't get LocalStore for account " + account.getDescription());
+            throw new IllegalStateException("Couldn't get LocalStore for account " + account);
         }
     }
 
-    private String getFolderServerId(Account account, long folderId) throws MessagingException {
-        LocalStore localStore = getLocalStoreOrThrow(account);
-        return localStore.getFolderServerId(folderId);
+    private String getFolderServerId(Account account, long folderId) {
+        MessageStore messageStore = messageStoreManager.getMessageStore(account);
+        String folderServerId = messageStore.getFolderServerId(folderId);
+        if (folderServerId == null) {
+            throw new IllegalStateException("Folder not found (ID: " + folderId + ")");
+        }
+        return folderServerId;
     }
 
     private long getFolderId(Account account, String folderServerId) {
@@ -410,56 +400,22 @@ public class MessagingController {
     /**
      * Find all messages in any local account which match the query 'query'
      */
-    public void searchLocalMessages(final LocalSearch search, final MessagingListener listener) {
-        threadPool.execute(new Runnable() {
-            @Override
-            public void run() {
-                searchLocalMessagesSynchronous(search, listener);
-            }
-        });
-    }
-
-    @VisibleForTesting
-    void searchLocalMessagesSynchronous(final LocalSearch search, final MessagingListener listener) {
+    public List<LocalMessage> searchLocalMessages(final LocalSearch search) {
         List<Account> searchAccounts = getAccountsFromLocalSearch(search, preferences);
 
+        List<LocalMessage> messages = new ArrayList<>();
         for (final Account account : searchAccounts) {
-
-            // Collecting statistics of the search result
-            MessageRetrievalListener<LocalMessage> retrievalListener = new MessageRetrievalListener<LocalMessage>() {
-                @Override
-                public void messageStarted(String message, int number, int ofTotal) {
-                }
-
-                @Override
-                public void messagesFinished(int number) {
-                }
-
-                @Override
-                public void messageFinished(LocalMessage message, int number, int ofTotal) {
-                    if (!isMessageSuppressed(message)) {
-                        List<LocalMessage> messages = new ArrayList<>();
-
-                        messages.add(message);
-                        if (listener != null) {
-                            listener.listLocalMessagesAddMessages(account, null, messages);
-                        }
-                    }
-                }
-            };
-
-            // build and do the query in the localstore
             try {
                 LocalStore localStore = localStoreProvider.getInstance(account);
-                localStore.searchForMessages(retrievalListener, search);
+                List<LocalMessage> localMessages = localStore.searchForMessages(search);
+
+                messages.addAll(localMessages);
             } catch (Exception e) {
                 Timber.e(e);
             }
         }
 
-        if (listener != null) {
-            listener.listLocalMessagesFinished();
-        }
+        return messages;
     }
 
     public Future<?> searchRemoteMessages(String acctUuid, long folderId, String query, Set<Flag> requiredFlags,
@@ -584,7 +540,7 @@ public class MessagingController {
             if (localFolder.getVisibleLimit() > 0) {
                 localFolder.setVisibleLimit(localFolder.getVisibleLimit() + account.getDisplayCount());
             }
-            synchronizeMailbox(account, folderId, listener);
+            synchronizeMailbox(account, folderId, false, listener);
         } catch (MessagingException me) {
             throw new RuntimeException("Unable to set visible limit on folder", me);
         }
@@ -593,21 +549,19 @@ public class MessagingController {
     /**
      * Start background synchronization of the specified folder.
      */
-    public void synchronizeMailbox(Account account, long folderId, MessagingListener listener) {
+    public void synchronizeMailbox(Account account, long folderId, boolean notify, MessagingListener listener) {
         putBackground("synchronizeMailbox", listener, () ->
-                synchronizeMailboxSynchronous(account, folderId, listener)
+                synchronizeMailboxSynchronous(account, folderId, notify, listener, new NotificationState())
         );
     }
 
     public void synchronizeMailboxBlocking(Account account, String folderServerId) {
         long folderId = getFolderId(account, folderServerId);
 
-        account.setRingNotified(false);
-
         final CountDownLatch latch = new CountDownLatch(1);
         putBackground("synchronizeMailbox", null, () -> {
             try {
-                synchronizeMailboxSynchronous(account, folderId, null);
+                synchronizeMailboxSynchronous(account, folderId, true, null, new NotificationState());
             } finally {
                 latch.countDown();
             }
@@ -620,18 +574,12 @@ public class MessagingController {
         }
     }
 
-    /**
-     * Start foreground synchronization of the specified folder. This is generally only called
-     * by synchronizeMailbox.
-     * <p>
-     * TODO Break this method up into smaller chunks.
-     */
-    @VisibleForTesting
-    void synchronizeMailboxSynchronous(Account account, long folderId, MessagingListener listener) {
+    private void synchronizeMailboxSynchronous(Account account, long folderId, boolean notify,
+            MessagingListener listener, NotificationState notificationState) {
         refreshFolderListIfStale(account);
 
         Backend backend = getBackend(account);
-        syncFolder(account, folderId, listener, backend);
+        syncFolder(account, folderId, notify, listener, backend, notificationState);
     }
 
     private void refreshFolderListIfStale(Account account) {
@@ -646,7 +594,8 @@ public class MessagingController {
         }
     }
 
-    private void syncFolder(Account account, long folderId, MessagingListener listener, Backend backend) {
+    private void syncFolder(Account account, long folderId, boolean notify, MessagingListener listener, Backend backend,
+            NotificationState notificationState) {
         ServerSettings serverSettings = account.getIncomingServerSettings();
         if (serverSettings.isMissingCredentials()) {
             handleAuthenticationFailure(account, true);
@@ -676,19 +625,25 @@ public class MessagingController {
             return;
         }
 
-        MessageStore messageStore = messageStoreManager.getMessageStore(account);
-        Long lastChecked = messageStore.getFolder(folderId, FolderDetailsAccessor::getLastChecked);
-        boolean suppressNotifications = lastChecked == null;
+        final boolean suppressNotifications;
+        if (notify) {
+            MessageStore messageStore = messageStoreManager.getMessageStore(account);
+            Long lastChecked = messageStore.getFolder(folderId, FolderDetailsAccessor::getLastChecked);
+            suppressNotifications = lastChecked == null;
+        } else {
+            suppressNotifications = true;
+        }
 
         String folderServerId = localFolder.getServerId();
         SyncConfig syncConfig = createSyncConfig(account);
-        ControllerSyncListener syncListener = new ControllerSyncListener(account, listener, suppressNotifications);
+        ControllerSyncListener syncListener =
+                new ControllerSyncListener(account, listener, suppressNotifications, notificationState);
 
         backend.sync(folderServerId, syncConfig, syncListener);
 
         if (commandException != null && !syncListener.syncFailed) {
             String rootMessage = getRootCauseMessage(commandException);
-            Timber.e("Root cause failure in %s:%s was '%s'", account.getDescription(), folderServerId, rootMessage);
+            Timber.e("Root cause failure in %s:%s was '%s'", account, folderServerId, rootMessage);
             updateFolderStatus(account, folderServerId, rootMessage);
             listener.synchronizeMailboxFailed(account, folderId, rootMessage);
         }
@@ -741,10 +696,6 @@ public class MessagingController {
             public void run() {
                 try {
                     processPendingCommandsSynchronous(account);
-                } catch (UnavailableStorageException e) {
-                    Timber.i("Failed to process pending command because storage is not available - " +
-                            "trying again later.");
-                    throw new UnavailableAccountException(e);
                 } catch (MessagingException me) {
                     Timber.e(me, "processPendingCommands");
 
@@ -962,7 +913,7 @@ public class MessagingController {
 
         if (operation != MoveOrCopyFlavor.COPY) {
             if (backend.getSupportsExpunge() && account.getExpungePolicy() == Expunge.EXPUNGE_IMMEDIATELY) {
-                Timber.i("processingPendingMoveOrCopy expunging folder %s:%s", account.getDescription(), srcFolderServerId);
+                Timber.i("processingPendingMoveOrCopy expunging folder %s:%s", account, srcFolderServerId);
                 backend.expungeMessages(srcFolderServerId, uids);
             }
 
@@ -1084,7 +1035,7 @@ public class MessagingController {
         Timber.i("Marking all messages in %s:%s as read", account, folderServerId);
 
         // TODO: Make this one database UPDATE operation
-        List<LocalMessage> messages = localFolder.getMessages(null, false);
+        List<LocalMessage> messages = localFolder.getMessages(false);
         for (Message message : messages) {
             if (!message.isSet(Flag.SEEN)) {
                 message.setFlag(Flag.SEEN, true);
@@ -1179,6 +1130,10 @@ public class MessagingController {
                 l.folderStatusChanged(account, folderId);
             }
 
+            if (flag == Flag.SEEN && newState) {
+                cancelNotificationsForMessages(account, folderId, uids);
+            }
+
             if (accountSupportsFlags) {
                 LocalFolder localFolder = localStore.getFolder(folderId);
                 try {
@@ -1192,6 +1147,13 @@ public class MessagingController {
                     Timber.e(e, "Couldn't open folder. Account: %s, folder ID: %d", account, folderId);
                 }
             }
+        }
+    }
+
+    private void cancelNotificationsForMessages(Account account, long folderId, List<String> uids) {
+        for (String uid : uids) {
+            MessageReference messageReference = new MessageReference(account.getUuid(), folderId, uid);
+            notificationController.removeNewMailNotification(account, messageReference);
         }
     }
 
@@ -1334,7 +1296,7 @@ public class MessagingController {
         localFolder.fetch(Collections.singletonList(message), fp, null);
 
         notificationController.removeNewMailNotification(account, message.makeMessageReference());
-        markMessageAsReadOnView(account, message);
+        markMessageAsOpened(account, message);
 
         return message;
     }
@@ -1357,15 +1319,39 @@ public class MessagingController {
         return message;
     }
 
-    private void markMessageAsReadOnView(Account account, LocalMessage message)
-            throws MessagingException {
-
-        if (account.isMarkMessageAsReadOnView() && !message.isSet(Flag.SEEN)) {
-            List<Long> messageIds = Collections.singletonList(message.getDatabaseId());
-            setFlag(account, messageIds, Flag.SEEN, true);
-
-            message.setFlagInternal(Flag.SEEN, true);
+    private void markMessageAsOpened(Account account, LocalMessage message) throws MessagingException {
+        if (!message.isSet(Flag.SEEN)) {
+            if (account.isMarkMessageAsReadOnView()) {
+                markMessageAsReadOnView(account, message);
+            } else {
+                // Marking a message as read will automatically mark it as "not new". But if we don't mark the message
+                // as read on opening, we have to manually mark it as "not new".
+                markMessageAsNotNew(account, message);
+            }
         }
+    }
+
+    private void markMessageAsReadOnView(Account account, LocalMessage message) throws MessagingException {
+        List<Long> messageIds = Collections.singletonList(message.getDatabaseId());
+        setFlag(account, messageIds, Flag.SEEN, true);
+
+        message.setFlagInternal(Flag.SEEN, true);
+    }
+
+    private void markMessageAsNotNew(Account account, LocalMessage message) {
+        MessageStore messageStore = messageStoreManager.getMessageStore(account);
+        long folderId = message.getFolder().getDatabaseId();
+        String messageServerId = message.getUid();
+        messageStore.setNewMessageState(folderId, messageServerId, false);
+    }
+
+    public void clearNewMessages(Account account) {
+        put("clearNewMessages", null, () -> clearNewMessagesBlocking(account));
+    }
+
+    private void clearNewMessagesBlocking(Account account) {
+        MessageStore messageStore = messageStoreManager.getMessageStore(account);
+        messageStore.clearNewMessageState();
     }
 
     public void loadAttachment(final Account account, final LocalMessage message, final Part part,
@@ -1416,8 +1402,13 @@ public class MessagingController {
         try {
             Long outboxFolderId = account.getOutboxFolderId();
             if (outboxFolderId == null) {
-                Timber.e("Error sending message. No Outbox folder configured.");
-                return;
+                if (BuildConfig.DEBUG) {
+                    throw new AssertionError("Outbox does not exist");
+                }
+
+                Timber.w("Outbox does not exist");
+
+                outboxFolderId = specialLocalFoldersCreator.createOutbox(account);
             }
 
             message.setFlag(Flag.SEEN, true);
@@ -1442,13 +1433,6 @@ public class MessagingController {
         backend.sendMessage(message);
     }
 
-    public void sendPendingMessages(MessagingListener listener) {
-        for (Account account : preferences.getAvailableAccounts()) {
-            sendPendingMessages(account, listener);
-        }
-    }
-
-
     /**
      * Attempt to send any messages that are sitting in the Outbox.
      */
@@ -1457,9 +1441,6 @@ public class MessagingController {
         putBackground("sendPendingMessages", listener, new Runnable() {
             @Override
             public void run() {
-                if (!account.isAvailable(context)) {
-                    throw new UnavailableAccountException();
-                }
                 if (messagesPendingSend(account)) {
 
                     showSendingNotificationIfNecessary(account);
@@ -1487,21 +1468,14 @@ public class MessagingController {
     }
 
     private boolean messagesPendingSend(final Account account) {
-        try {
-            LocalFolder localFolder = localStoreProvider.getInstance(account).getFolder(account.getOutboxFolderId());
-            if (!localFolder.exists()) {
-                return false;
-            }
-
-            localFolder.open();
-
-            if (localFolder.getMessageCount() > 0) {
-                return true;
-            }
-        } catch (Exception e) {
-            Timber.e(e, "Exception while checking for unsent messages");
+        Long outboxFolderId = account.getOutboxFolderId();
+        if (outboxFolderId == null) {
+            Timber.w("Could not get Outbox folder ID from Account");
+            return false;
         }
-        return false;
+
+        MessageStore messageStore = messageStoreManager.getMessageStore(account);
+        return messageStore.getMessageCount(outboxFolderId) > 0;
     }
 
     /**
@@ -1522,7 +1496,7 @@ public class MessagingController {
             OutboxStateRepository outboxStateRepository = localStore.getOutboxStateRepository();
             LocalFolder localFolder = localStore.getFolder(account.getOutboxFolderId());
             if (!localFolder.exists()) {
-                Timber.v("Outbox does not exist");
+                Timber.w("Outbox does not exist");
                 return;
             }
 
@@ -1530,7 +1504,7 @@ public class MessagingController {
 
             long outboxFolderId = localFolder.getDatabaseId();
 
-            List<LocalMessage> localMessages = localFolder.getMessages(null);
+            List<LocalMessage> localMessages = localFolder.getMessages();
             int progress = 0;
             int todo = localMessages.size();
             for (MessagingListener l : getListeners()) {
@@ -1561,7 +1535,7 @@ public class MessagingController {
                     OutboxState outboxState = outboxStateRepository.getOutboxState(messageId);
 
                     if (outboxState.getSendState() != SendState.READY) {
-                        Timber.v("Skipping sending message " + message.getUid());
+                        Timber.v("Skipping sending message %s", message.getUid());
                         notificationController.showSendFailedNotification(account,
                                 new MessagingException(message.getSubject()));
                         continue;
@@ -1640,9 +1614,6 @@ public class MessagingController {
                     notificationController.showSendFailedNotification(account, lastFailure);
                 }
             }
-        } catch (UnavailableStorageException e) {
-            Timber.i("Failed to send pending messages because storage is not available - trying again later.");
-            throw new UnavailableAccountException(e);
         } catch (Exception e) {
             Timber.v(e, "Failed to send pending messages");
         } finally {
@@ -1675,6 +1646,10 @@ public class MessagingController {
                 queuePendingCommand(account, command);
                 processPendingCommands(account);
             }
+        }
+
+        for (MessagingListener listener : getListeners()) {
+            listener.folderStatusChanged(account, account.getOutboxFolderId());
         }
     }
 
@@ -1908,9 +1883,6 @@ public class MessagingController {
             }
 
             processPendingCommands(account);
-        } catch (UnavailableStorageException e) {
-            Timber.i("Failed to move/copy message because storage is not available - trying again later.");
-            throw new UnavailableAccountException(e);
         } catch (MessagingException me) {
             throw new RuntimeException("Error moving message", me);
         }
@@ -1960,7 +1932,7 @@ public class MessagingController {
             localFolder.open();
             String uid = localFolder.getMessageUidById(id);
             if (uid != null) {
-                MessageReference messageReference = new MessageReference(account.getUuid(), folderId, uid, null);
+                MessageReference messageReference = new MessageReference(account.getUuid(), folderId, uid);
                 deleteMessage(messageReference);
             }
         } catch (MessagingException me) {
@@ -2052,6 +2024,8 @@ public class MessagingController {
             List<LocalMessage> syncedMessages = new ArrayList<>();
             List<String> syncedMessageUids = new ArrayList<>();
             for (LocalMessage message : messages) {
+                notificationController.removeNewMailNotification(account, message.makeMessageReference());
+
                 String uid = message.getUid();
                 if (uid.startsWith(K9.LOCAL_UID_PREFIX)) {
                     localOnlyMessages.add(message);
@@ -2120,7 +2094,7 @@ public class MessagingController {
                 }
             }
 
-            Timber.d("Delete policy for account %s is %s", account.getDescription(), account.getDeletePolicy());
+            Timber.d("Delete policy for account %s is %s", account, account.getDeletePolicy());
 
             Long outboxFolderId = account.getOutboxFolderId();
             if (outboxFolderId != null && folderId == outboxFolderId && supportsUpload(account)) {
@@ -2155,9 +2129,6 @@ public class MessagingController {
             }
 
             unsuppressMessages(account, messages);
-        } catch (UnavailableStorageException e) {
-            Timber.i("Failed to delete message because storage is not available - trying again later.");
-            throw new UnavailableAccountException(e);
         } catch (MessagingException me) {
             throw new RuntimeException("Error deleting message from local store.", me);
         }
@@ -2192,7 +2163,7 @@ public class MessagingController {
         // Remove all messages marked as deleted
         folder.destroyDeletedMessages();
 
-        compact(account, null);
+        compact(account);
     }
 
     public void emptyTrash(final Account account, MessagingListener listener) {
@@ -2227,9 +2198,6 @@ public class MessagingController {
                         queuePendingCommand(account, command);
                         processPendingCommands(account);
                     }
-                } catch (UnavailableStorageException e) {
-                    Timber.i("Failed to empty trash because storage is not available - trying again later.");
-                    throw new UnavailableAccountException(e);
                 } catch (Exception e) {
                     Timber.e(e, "emptyTrash failed");
                 }
@@ -2249,9 +2217,6 @@ public class MessagingController {
             LocalFolder localFolder = localStoreProvider.getInstance(account).getFolder(folderId);
             localFolder.open();
             localFolder.clearAllMessages();
-        } catch (UnavailableStorageException e) {
-            Timber.i("Failed to clear folder because storage is not available - trying again later.");
-            throw new UnavailableAccountException(e);
         } catch (Exception e) {
             Timber.e(e, "clearFolder failed");
         }
@@ -2277,7 +2242,7 @@ public class MessagingController {
     public boolean performPeriodicMailSync(Account account) {
         final CountDownLatch latch = new CountDownLatch(1);
         MutableBoolean syncError = new MutableBoolean(false);
-        checkMail(account, false, false, new SimpleMessagingListener() {
+        checkMail(account, false, false, true, new SimpleMessagingListener() {
             @Override
             public void checkMailFinished(Context context, Account account) {
                 latch.countDown();
@@ -2289,11 +2254,11 @@ public class MessagingController {
             }
         });
 
-        Timber.v("performPeriodicMailSync(%s) about to await latch release", account.getDescription());
+        Timber.v("performPeriodicMailSync(%s) about to await latch release", account);
 
         try {
             latch.await();
-            Timber.v("performPeriodicMailSync(%s) got latch release", account.getDescription());
+            Timber.v("performPeriodicMailSync(%s) got latch release", account);
         } catch (Exception e) {
             Timber.e(e, "Interrupted while awaiting latch release");
         }
@@ -2313,20 +2278,19 @@ public class MessagingController {
      * Checks mail for one or multiple accounts. If account is null all accounts
      * are checked.
      */
-    public void checkMail(final Account account,
-            final boolean ignoreLastCheckedTime,
-            final boolean useManualWakeLock,
-            final MessagingListener listener) {
+    public void checkMail(Account account, boolean ignoreLastCheckedTime, boolean useManualWakeLock, boolean notify,
+            MessagingListener listener) {
 
-        TracingWakeLock twakeLock = null;
+        final WakeLock wakeLock;
         if (useManualWakeLock) {
-            TracingPowerManager pm = TracingPowerManager.getPowerManager(context);
+            PowerManager pm = DI.get(PowerManager.class);
 
-            twakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "K9 MessagingController.checkMail");
-            twakeLock.setReferenceCounted(false);
-            twakeLock.acquire(K9.MANUAL_WAKE_LOCK_TIMEOUT);
+            wakeLock = pm.newWakeLock("K9 MessagingController.checkMail");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire(K9.MANUAL_WAKE_LOCK_TIMEOUT);
+        } else {
+            wakeLock = null;
         }
-        final TracingWakeLock wakeLock = twakeLock;
 
         for (MessagingListener l : getListeners(listener)) {
             l.checkMailStarted(context, account);
@@ -2343,11 +2307,11 @@ public class MessagingController {
                         accounts = new ArrayList<>(1);
                         accounts.add(account);
                     } else {
-                        accounts = preferences.getAvailableAccounts();
+                        accounts = preferences.getAccounts();
                     }
 
                     for (final Account account : accounts) {
-                        checkMailForAccount(context, account, ignoreLastCheckedTime, listener);
+                        checkMailForAccount(account, ignoreLastCheckedTime, notify, listener);
                     }
 
                 } catch (Exception e) {
@@ -2374,17 +2338,11 @@ public class MessagingController {
     }
 
 
-    private void checkMailForAccount(final Context context, final Account account,
-            final boolean ignoreLastCheckedTime,
-            final MessagingListener listener) {
-        if (!account.isAvailable(context)) {
-            Timber.i("Skipping synchronizing unavailable account %s", account.getDescription());
-            return;
-        }
+    private void checkMailForAccount(Account account, boolean ignoreLastCheckedTime, boolean notify,
+            MessagingListener listener) {
+        Timber.i("Synchronizing account %s", account);
 
-        Timber.i("Synchronizing account %s", account.getDescription());
-
-        account.setRingNotified(false);
+        NotificationState notificationState = new NotificationState();
 
         sendPendingMessages(account, listener);
 
@@ -2403,40 +2361,27 @@ public class MessagingController {
 
                 if (LocalFolder.isModeMismatch(aDisplayMode, fDisplayClass)) {
                     // Never sync a folder that isn't displayed
-                    /*
-                    if (K9.DEBUG) {
-                        Log.v(K9.LOG_TAG, "Not syncing folder " + folder.getName() +
-                              " which is in display mode " + fDisplayClass + " while account is in display mode " + aDisplayMode);
-                    }
-                    */
-
                     continue;
                 }
 
                 if (LocalFolder.isModeMismatch(aSyncMode, fSyncClass)) {
                     // Do not sync folders in the wrong class
-                    /*
-                    if (K9.DEBUG) {
-                        Log.v(K9.LOG_TAG, "Not syncing folder " + folder.getName() +
-                              " which is in sync mode " + fSyncClass + " while account is in sync mode " + aSyncMode);
-                    }
-                    */
-
                     continue;
                 }
-                synchronizeFolder(account, folder, ignoreLastCheckedTime, listener);
+                synchronizeFolder(account, folder, ignoreLastCheckedTime, notify, listener, notificationState);
             }
         } catch (MessagingException e) {
-            Timber.e(e, "Unable to synchronize account %s", account.getName());
+            Timber.e(e, "Unable to synchronize account %s", account);
         } finally {
-            putBackground("clear notification flag for " + account.getDescription(), null, new Runnable() {
+            putBackground("clear notification flag for " + account, null, new Runnable() {
                         @Override
                         public void run() {
-                            Timber.v("Clearing notification flag for %s", account.getDescription());
+                            Timber.v("Clearing notification flag for %s", account);
 
-                            account.setRingNotified(false);
+                            clearFetchingMailNotification(account);
+
                             if (getUnreadMessageCount(account) == 0) {
-                                notificationController.clearNewMailNotifications(account);
+                                notificationController.clearNewMailNotifications(account, false);
                             }
                         }
                     }
@@ -2447,14 +2392,14 @@ public class MessagingController {
     }
 
     private void synchronizeFolder(Account account, LocalFolder folder, boolean ignoreLastCheckedTime,
-            MessagingListener listener) {
+            boolean notify, MessagingListener listener, NotificationState notificationState) {
         putBackground("sync" + folder.getServerId(), null, () -> {
-            synchronizeFolderInBackground(account, folder, ignoreLastCheckedTime, listener);
+            synchronizeFolderInBackground(account, folder, ignoreLastCheckedTime, notify, listener, notificationState);
         });
     }
 
     private void synchronizeFolderInBackground(Account account, LocalFolder folder, boolean ignoreLastCheckedTime,
-            MessagingListener listener) {
+            boolean notify, MessagingListener listener, NotificationState notificationState) {
         Timber.v("Folder %s was last synced @ %tc", folder.getServerId(), folder.getLastChecked());
 
         if (!ignoreLastCheckedTime) {
@@ -2477,12 +2422,12 @@ public class MessagingController {
         try {
             showFetchingMailNotificationIfNecessary(account, folder);
             try {
-                synchronizeMailboxSynchronous(account, folder.getDatabaseId(), listener);
+                synchronizeMailboxSynchronous(account, folder.getDatabaseId(), notify, listener, notificationState);
             } finally {
-                clearFetchingMailNotificationIfNecessary(account);
+                showEmptyFetchingMailNotificationIfNecessary(account);
             }
         } catch (Exception e) {
-            Timber.e(e, "Exception while processing folder %s:%s", account.getDescription(), folder.getServerId());
+            Timber.e(e, "Exception while processing folder %s:%s", account, folder.getServerId());
         }
     }
 
@@ -2492,34 +2437,29 @@ public class MessagingController {
         }
     }
 
-    private void clearFetchingMailNotificationIfNecessary(Account account) {
+    private void showEmptyFetchingMailNotificationIfNecessary(Account account) {
         if (account.isNotifySync()) {
-            notificationController.clearFetchingMailNotification(account);
+            notificationController.showEmptyFetchingMailNotification(account);
         }
     }
 
+    private void clearFetchingMailNotification(Account account) {
+        notificationController.clearFetchingMailNotification(account);
+    }
 
-    public void compact(final Account account, final MessagingListener ml) {
-        putBackground("compact:" + account.getDescription(), ml, new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    MessageStore messageStore = messageStoreManager.getMessageStore(account);
-                    long oldSize = messageStore.getSize();
-                    messageStore.compact();
-                    long newSize = messageStore.getSize();
-                    for (MessagingListener l : getListeners(ml)) {
-                        l.accountSizeChanged(account, oldSize, newSize);
-                    }
-                } catch (Exception e) {
-                    Timber.e(e, "Failed to compact account %s", account.getDescription());
-                }
+    public void compact(Account account) {
+        putBackground("compact:" + account, null, () -> {
+            try {
+                MessageStore messageStore = messageStoreManager.getMessageStore(account);
+                messageStore.compact();
+            } catch (Exception e) {
+                Timber.e(e, "Failed to compact account %s", account);
             }
         });
     }
 
     public void deleteAccount(Account account) {
-        notificationController.clearNewMailNotifications(account);
+        notificationController.clearNewMailNotifications(account, false);
         memorizingMessagingListener.removeAccount(account);
     }
 
@@ -2575,8 +2515,14 @@ public class MessagingController {
         }
     }
 
+    public void clearNotifications(LocalSearch search) {
+        put("clearNotifications", null, () -> {
+            notificationOperations.clearNotifications(search);
+        });
+    }
+
     public void cancelNotificationsForAccount(Account account) {
-        notificationController.clearNewMailNotifications(account);
+        notificationController.clearNewMailNotifications(account, true);
     }
 
     public void cancelNotificationForMessage(Account account, MessageReference messageReference) {
@@ -2664,18 +2610,18 @@ public class MessagingController {
         private final Account account;
         private final MessagingListener listener;
         private final LocalStore localStore;
-        private final int previousUnreadMessageCount;
         private final boolean suppressNotifications;
+        private final NotificationState notificationState;
         boolean syncFailed = false;
 
 
-        ControllerSyncListener(Account account, MessagingListener listener, boolean suppressNotifications) {
+        ControllerSyncListener(Account account, MessagingListener listener, boolean suppressNotifications,
+                NotificationState notificationState) {
             this.account = account;
             this.listener = listener;
             this.suppressNotifications = suppressNotifications;
+            this.notificationState = notificationState;
             this.localStore = getLocalStoreOrThrow(account);
-
-            previousUnreadMessageCount = getUnreadMessageCount(account);
         }
 
         @Override
@@ -2733,7 +2679,9 @@ public class MessagingController {
                     notificationStrategy.shouldNotifyForMessage(account, localFolder, message, isOldMessage)) {
                 Timber.v("Creating notification for message %s:%s", localFolder.getName(), message.getUid());
                 // Notify with the localMessage so that we don't have to recalculate the content preview.
-                notificationController.addNewMailNotification(account, message, previousUnreadMessageCount);
+                boolean silent = notificationState.wasNotified();
+                notificationController.addNewMailNotification(account, message, silent);
+                notificationState.setWasNotified(true);
             }
 
             if (!message.isSet(Flag.SEEN)) {
@@ -2751,7 +2699,7 @@ public class MessagingController {
 
             String accountUuid = account.getUuid();
             long folderId = getFolderId(account, folderServerId);
-            MessageReference messageReference = new MessageReference(accountUuid, folderId, messageServerId, null);
+            MessageReference messageReference = new MessageReference(accountUuid, folderId, messageServerId);
             notificationController.removeNewMailNotification(account, messageReference);
         }
 

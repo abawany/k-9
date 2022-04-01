@@ -10,17 +10,15 @@ import java.util.Set;
 import java.util.TreeMap;
 
 import android.content.Context;
+import android.graphics.Color;
 
 import com.fsck.k9.Account;
 import com.fsck.k9.Account.SortType;
 import com.fsck.k9.DI;
 import com.fsck.k9.FontSizes;
 import com.fsck.k9.K9;
-import com.fsck.k9.K9.NotificationHideSubject;
 import com.fsck.k9.K9.NotificationQuickDelete;
 import com.fsck.k9.K9.SplitViewMode;
-import com.fsck.k9.K9.AppTheme;
-import com.fsck.k9.K9.SubTheme;
 import com.fsck.k9.core.R;
 import com.fsck.k9.preferences.Settings.BooleanSetting;
 import com.fsck.k9.preferences.Settings.ColorSetting;
@@ -132,10 +130,6 @@ public class GeneralSettingsDescriptions {
                 new V(1, new BooleanSetting(false)),
                 new V(69, null)
         ));
-        s.put("keyguardPrivacy", Settings.versions(
-                new V(1, new BooleanSetting(false)),
-                new V(12, null)
-        ));
         s.put("language", Settings.versions(
                 new V(1, new LanguageSetting())
         ));
@@ -164,7 +158,8 @@ public class GeneralSettingsDescriptions {
                 new V(1, new TimeSetting("21:00"))
         ));
         s.put("registeredNameColor", Settings.versions(
-                new V(1, new ColorSetting(0xFF00008F))
+                new V(1, new ColorSetting(0xFF00008F)),
+                new V(79, new ColorSetting(0xFF1093F5))
         ));
         s.put("showContactName", Settings.versions(
                 new V(1, new BooleanSetting(false))
@@ -194,9 +189,6 @@ public class GeneralSettingsDescriptions {
         ));
         s.put("useVolumeKeysForNavigation", Settings.versions(
                 new V(1, new BooleanSetting(false))
-        ));
-        s.put("notificationHideSubject", Settings.versions(
-                new V(12, new EnumSetting<>(NotificationHideSubject.class, NotificationHideSubject.NEVER))
         ));
         s.put("useBackgroundAsUnreadIndicator", Settings.versions(
                 new V(19, new BooleanSetting(true)),
@@ -290,11 +282,11 @@ public class GeneralSettingsDescriptions {
         SETTINGS = Collections.unmodifiableMap(s);
 
         Map<Integer, SettingsUpgrader> u = new HashMap<>();
-        u.put(12, new SettingsUpgraderV12());
         u.put(24, new SettingsUpgraderV24());
         u.put(31, new SettingsUpgraderV31());
         u.put(58, new SettingsUpgraderV58());
         u.put(69, new SettingsUpgraderV69());
+        u.put(79, new SettingsUpgraderV79());
 
         UPGRADERS = Collections.unmodifiableMap(u);
     }
@@ -320,27 +312,6 @@ public class GeneralSettingsDescriptions {
             }
         }
         return result;
-    }
-
-    /**
-     * Upgrades the settings from version 11 to 12
-     *
-     * Map the 'keyguardPrivacy' value to the new NotificationHideSubject enum.
-     */
-    private static class SettingsUpgraderV12 implements SettingsUpgrader {
-
-        @Override
-        public Set<String> upgrade(Map<String, Object> settings) {
-            Boolean keyguardPrivacy = (Boolean) settings.get("keyguardPrivacy");
-            if (keyguardPrivacy != null && keyguardPrivacy) {
-                // current setting: only show subject when unlocked
-                settings.put("notificationHideSubject", NotificationHideSubject.WHEN_LOCKED);
-            } else {
-                // always show subject [old default]
-                settings.put("notificationHideSubject", NotificationHideSubject.NEVER);
-            }
-            return new HashSet<>(Collections.singletonList("keyguardPrivacy"));
-        }
     }
 
     /**
@@ -448,6 +419,27 @@ public class GeneralSettingsDescriptions {
         }
     }
 
+    /**
+     * Upgrades the settings from version 78 to 79.
+     *
+     * <p>
+     * Change default value of {@code registeredNameColor} to have enough contrast in both the light and dark theme.
+     * </p>
+     */
+    private static class SettingsUpgraderV79 implements SettingsUpgrader {
+
+        @Override
+        public Set<String> upgrade(Map<String, Object> settings) {
+            final Integer registeredNameColorValue = (Integer) settings.get("registeredNameColor");
+
+            if (registeredNameColorValue != null && registeredNameColorValue == 0xFF00008F) {
+                settings.put("registeredNameColor", 0xFF1093F5);
+            }
+
+            return null;
+        }
+    }
+
     private static class LanguageSetting extends PseudoEnumSetting<String> {
         private final Context context = DI.get(Context.class);
         private final Map<String, String> mapping;
@@ -493,7 +485,7 @@ public class GeneralSettingsDescriptions {
         @Override
         public AppTheme fromString(String value) throws InvalidSettingValueException {
             try {
-                return K9.AppTheme.valueOf(value);
+                return AppTheme.valueOf(value);
             } catch (IllegalArgumentException e) {
                 throw new InvalidSettingValueException();
             }

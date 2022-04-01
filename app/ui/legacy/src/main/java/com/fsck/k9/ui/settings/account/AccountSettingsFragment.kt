@@ -1,14 +1,18 @@
 package com.fsck.k9.ui.settings.account
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Vibrator
 import android.view.Menu
 import android.view.MenuInflater
 import android.view.MenuItem
 import android.widget.Toast
+import androidx.core.content.getSystemService
 import androidx.preference.ListPreference
 import androidx.preference.Preference
+import androidx.preference.PreferenceCategory
 import androidx.preference.SwitchPreference
 import com.fsck.k9.Account
 import com.fsck.k9.account.BackgroundAccountRemover
@@ -24,6 +28,8 @@ import com.fsck.k9.mailstore.FolderType
 import com.fsck.k9.mailstore.RemoteFolder
 import com.fsck.k9.notification.NotificationChannelManager
 import com.fsck.k9.notification.NotificationChannelManager.ChannelType
+import com.fsck.k9.notification.NotificationLightDecoder
+import com.fsck.k9.notification.NotificationVibrationDecoder
 import com.fsck.k9.ui.R
 import com.fsck.k9.ui.endtoend.AutocryptKeyTransferActivity
 import com.fsck.k9.ui.settings.onClick
@@ -46,7 +52,15 @@ class AccountSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFr
     private val messagingController: MessagingController by inject()
     private val accountRemover: BackgroundAccountRemover by inject()
     private val notificationChannelManager: NotificationChannelManager by inject()
+    private val notificationLightDecoder: NotificationLightDecoder by inject()
+    private val notificationVibrationDecoder: NotificationVibrationDecoder by inject()
+
+    private val vibrator by lazy { requireContext().getSystemService<Vibrator>() }
     private lateinit var dataStore: AccountSettingsDataStore
+
+    private var notificationSoundPreference: NotificationSoundPreference? = null
+    private var notificationLightPreference: ListPreference? = null
+    private var notificationVibrationPreference: VibrationPreference? = null
 
     private val accountUuid: String by lazy {
         checkNotNull(arguments?.getString(ARG_ACCOUNT_UUID)) { "$ARG_ACCOUNT_UUID == null" }
@@ -88,6 +102,17 @@ class AccountSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFr
         // we might be returning from OpenPgpAppSelectDialog, make sure settings are up to date
         val account = getAccount()
         initializeCryptoSettings(account)
+
+        // Don't update the notification preferences when resuming after the user has selected a new notification sound
+        // via NotificationSoundPreference. Otherwise we race the background thread and might read data from the old
+        // NotificationChannel, overwriting the notification sound with the previous value.
+        notificationSoundPreference?.let { notificationSoundPreference ->
+            if (notificationSoundPreference.receivedActivityResultJustNow) {
+                notificationSoundPreference.receivedActivityResultJustNow = false
+            } else {
+                maybeUpdateNotificationPreferences(account)
+            }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
@@ -175,30 +200,85 @@ class AccountSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFr
         if (!messagingController.isPushCapable(account)) {
             findPreference<Preference>(PREFERENCE_PUSH_MODE)?.remove()
             findPreference<Preference>(PREFERENCE_ADVANCED_PUSH_SETTINGS)?.remove()
-            findPreference<Preference>(PREFERENCE_REMOTE_SEARCH)?.remove()
         }
     }
 
     private fun initializeNotifications(account: Account) {
+        if (vibrator?.hasVibrator() != true) {
+            findPreference<Preference>(PREFERENCE_NOTIFICATION_VIBRATION)?.remove()
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PRE_SDK26_NOTIFICATION_PREFERENCES.forEach { findPreference<Preference>(it).remove() }
-        }
-
-        findPreference<NotificationsPreference>(PREFERENCE_NOTIFICATION_SETTINGS_MESSAGES)?.let {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                it.notificationChannelId = notificationChannelManager.getChannelIdFor(account, ChannelType.MESSAGES)
-            } else {
-                it.remove()
+            findPreference<NotificationSoundPreference>(PREFERENCE_NOTIFICATION_SOUND)?.let { preference ->
+                notificationSoundPreference = preference
+                preference.isEnabled = false
             }
-        }
 
-        findPreference<NotificationsPreference>(PREFERENCE_NOTIFICATION_SETTINGS_MISCELLANEOUS)?.let {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                it.notificationChannelId =
+            findPreference<ListPreference>(PREFERENCE_NOTIFICATION_LIGHT)?.let { preference ->
+                notificationLightPreference = preference
+                preference.isEnabled = false
+            }
+
+            findPreference<VibrationPreference>(PREFERENCE_NOTIFICATION_VIBRATION)?.let { preference ->
+                notificationVibrationPreference = preference
+                preference.isEnabled = false
+            }
+
+            findPreference<NotificationsPreference>(PREFERENCE_NOTIFICATION_SETTINGS_MESSAGES)?.let {
+                it.notificationChannelIdProvider = {
+                    notificationChannelManager.getChannelIdFor(account, ChannelType.MESSAGES)
+                }
+            }
+
+            findPreference<NotificationsPreference>(PREFERENCE_NOTIFICATION_SETTINGS_MISCELLANEOUS)?.let {
+                it.notificationChannelIdProvider = {
                     notificationChannelManager.getChannelIdFor(account, ChannelType.MISCELLANEOUS)
-            } else {
-                it.remove()
+                }
             }
+        } else {
+            findPreference<PreferenceCategory>(PREFERENCE_NOTIFICATION_CHANNELS).remove()
+        }
+    }
+
+    private fun maybeUpdateNotificationPreferences(account: Account) {
+        if (notificationSoundPreference != null ||
+            notificationLightPreference != null ||
+            notificationVibrationPreference != null
+        ) {
+            updateNotificationPreferences(account)
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private fun updateNotificationPreferences(account: Account) {
+        val notificationConfiguration = notificationChannelManager.getNotificationConfiguration(account)
+
+        notificationSoundPreference?.let { preference ->
+            preference.setNotificationSound(notificationConfiguration.sound)
+            preference.isEnabled = true
+        }
+
+        notificationLightPreference?.let { preference ->
+            val notificationLightSetting = notificationLightDecoder.decode(
+                isBlinkLightsEnabled = notificationConfiguration.isBlinkLightsEnabled,
+                lightColor = notificationConfiguration.lightColor,
+                accountColor = account.chipColor
+            )
+            preference.value = notificationLightSetting.name
+            preference.isEnabled = true
+        }
+
+        notificationVibrationPreference?.let { preference ->
+            val notificationVibration = notificationVibrationDecoder.decode(
+                isVibrationEnabled = notificationConfiguration.isVibrationEnabled,
+                systemPattern = notificationConfiguration.vibrationPattern
+            )
+            preference.setVibration(
+                isVibrationEnabled = notificationVibration.isEnabled,
+                vibratePattern = notificationVibration.pattern,
+                vibrationTimes = notificationVibration.repeatCount
+            )
+            preference.isEnabled = true
         }
     }
 
@@ -332,7 +412,7 @@ class AccountSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFr
         val dialogFragment = ConfirmationDialogFragment.newInstance(
             DIALOG_DELETE_ACCOUNT,
             getString(R.string.account_delete_dlg_title),
-            getString(R.string.account_delete_dlg_instructions_fmt, getAccount().description),
+            getString(R.string.account_delete_dlg_instructions_fmt, getAccount().displayName),
             getString(R.string.okay_action),
             getString(R.string.cancel_action)
         )
@@ -378,7 +458,6 @@ class AccountSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFr
         private const val PREFERENCE_MESSAGE_AGE = "account_message_age"
         private const val PREFERENCE_PUSH_MODE = "folder_push_mode"
         private const val PREFERENCE_ADVANCED_PUSH_SETTINGS = "push_advanced"
-        private const val PREFERENCE_REMOTE_SEARCH = "search"
         private const val PREFERENCE_OPENPGP_ENABLE = "openpgp_provider"
         private const val PREFERENCE_OPENPGP_KEY = "openpgp_key"
         private const val PREFERENCE_AUTOCRYPT_TRANSFER = "autocrypt_transfer"
@@ -389,18 +468,13 @@ class AccountSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFr
         private const val PREFERENCE_SENT_FOLDER = "sent_folder"
         private const val PREFERENCE_SPAM_FOLDER = "spam_folder"
         private const val PREFERENCE_TRASH_FOLDER = "trash_folder"
+        private const val PREFERENCE_NOTIFICATION_SOUND = "account_ringtone"
+        private const val PREFERENCE_NOTIFICATION_LIGHT = "notification_light"
+        private const val PREFERENCE_NOTIFICATION_VIBRATION = "account_combined_vibration"
+        private const val PREFERENCE_NOTIFICATION_CHANNELS = "notification_channels"
         private const val PREFERENCE_NOTIFICATION_SETTINGS_MESSAGES = "open_notification_settings_messages"
         private const val PREFERENCE_NOTIFICATION_SETTINGS_MISCELLANEOUS = "open_notification_settings_miscellaneous"
         private const val DELETE_POLICY_MARK_AS_READ = "MARK_AS_READ"
-
-        private val PRE_SDK26_NOTIFICATION_PREFERENCES = arrayOf(
-            "account_ringtone",
-            "account_vibrate",
-            "account_vibrate_pattern",
-            "account_vibrate_times",
-            "account_led",
-            "led_color"
-        )
 
         private const val DIALOG_DELETE_ACCOUNT = 1
         private const val REQUEST_DELETE_ACCOUNT = 1

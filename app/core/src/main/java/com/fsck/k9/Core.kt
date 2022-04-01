@@ -2,40 +2,39 @@ package com.fsck.k9
 
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.os.Handler
-import android.os.Looper
 import com.fsck.k9.job.K9JobManager
 import com.fsck.k9.mail.internet.BinaryTempFileBody
-import com.fsck.k9.service.StorageGoneReceiver
-import java.util.concurrent.SynchronousQueue
-import timber.log.Timber
+import com.fsck.k9.notification.NotificationController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.koin.core.qualifier.named
 
 object Core : EarlyInit {
     private val context: Context by inject()
     private val appConfig: AppConfig by inject()
     private val jobManager: K9JobManager by inject()
+    private val appCoroutineScope: CoroutineScope by inject(named("AppCoroutineScope"))
+    private val preferences: Preferences by inject()
+    private val notificationController: NotificationController by inject()
 
     /**
      * This needs to be called from [Application#onCreate][android.app.Application#onCreate] before calling through
      * to the super class's `onCreate` implementation and before initializing the dependency injection library.
      */
-    fun earlyInit(context: Context) {
+    fun earlyInit() {
         if (K9.DEVELOPER_MODE) {
             enableStrictMode()
         }
-
-        val packageName = context.packageName
-        K9.Intents.init(packageName)
     }
 
     fun init(context: Context) {
         BinaryTempFileBody.setTempDirectory(context.cacheDir)
 
         setServicesEnabled(context)
-        registerReceivers(context)
+
+        restoreNotifications()
     }
 
     /**
@@ -80,41 +79,10 @@ object Core : EarlyInit {
         }
     }
 
-    /**
-     * Register BroadcastReceivers programmatically because doing it from manifest
-     * would make K-9 auto-start. We don't want auto-start because the initialization
-     * sequence isn't safe while some events occur (SD card unmount).
-     */
-    private fun registerReceivers(context: Context) {
-        val receiver = StorageGoneReceiver()
-        val filter = IntentFilter()
-        filter.addAction(Intent.ACTION_MEDIA_EJECT)
-        filter.addAction(Intent.ACTION_MEDIA_UNMOUNTED)
-        filter.addDataScheme("file")
-
-        val queue = SynchronousQueue<Handler>()
-
-        // starting a new thread to handle unmount events
-        Thread(
-            Runnable {
-                Looper.prepare()
-                try {
-                    queue.put(Handler())
-                } catch (e: InterruptedException) {
-                    Timber.e(e)
-                }
-
-                Looper.loop()
-            },
-            "Unmount-thread"
-        ).start()
-
-        try {
-            val storageGoneHandler = queue.take()
-            context.registerReceiver(receiver, filter, null, storageGoneHandler)
-            Timber.i("Registered: unmount receiver")
-        } catch (e: InterruptedException) {
-            Timber.e(e, "Unable to register unmount receiver")
+    private fun restoreNotifications() {
+        appCoroutineScope.launch(Dispatchers.IO) {
+            val accounts = preferences.accounts
+            notificationController.restoreNewMailNotifications(accounts)
         }
     }
 }

@@ -21,6 +21,7 @@ import android.widget.CompoundButton.OnCheckedChangeListener;
 import android.widget.Spinner;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import com.fsck.k9.Account;
 import com.fsck.k9.DI;
 import com.fsck.k9.LocalKeyStoreManager;
@@ -46,6 +47,7 @@ import com.fsck.k9.ui.base.extensions.TextInputLayoutHelper;
 import com.fsck.k9.view.ClientCertificateSpinner;
 import com.fsck.k9.view.ClientCertificateSpinner.OnClientCertificateChangedListener;
 
+import java.util.Locale;
 import java.util.Map;
 
 import com.google.android.material.textfield.TextInputEditText;
@@ -312,7 +314,7 @@ public class AccountSetupIncoming extends K9Activity implements OnClickListener 
             }
 
             if (settings.port != -1) {
-                mPortView.setText(String.format("%d", settings.port));
+                mPortView.setText(String.format(Locale.ROOT, "%d", settings.port));
             } else {
                 updatePortFromSecurityType();
             }
@@ -394,7 +396,7 @@ public class AccountSetupIncoming extends K9Activity implements OnClickListener 
     }
 
     @Override
-    public void onSaveInstanceState(Bundle outState) {
+    public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putString(EXTRA_ACCOUNT, mAccount.getUuid());
         outState.putInt(STATE_SECURITY_TYPE_POSITION, mCurrentSecurityTypeViewPosition);
@@ -549,7 +551,7 @@ public class AccountSetupIncoming extends K9Activity implements OnClickListener 
                  * Set the username and password for the outgoing settings to the username and
                  * password the user just set for incoming.
                  */
-                String username = mUsernameView.getText().toString();
+                String username = mUsernameView.getText().toString().trim();
 
                 String password = null;
                 String clientCertificateAlias = null;
@@ -569,7 +571,7 @@ public class AccountSetupIncoming extends K9Activity implements OnClickListener 
                         clientCertificateAlias);
                 mAccount.setOutgoingServerSettings(transportServer);
 
-                AccountSetupOutgoing.actionOutgoingSettings(this, mAccount, mMakeDefault);
+                AccountSetupOutgoing.actionOutgoingSettings(this, mAccount);
             }
         }
     }
@@ -578,7 +580,7 @@ public class AccountSetupIncoming extends K9Activity implements OnClickListener 
         try {
             ConnectionSecurity connectionSecurity = getSelectedSecurity();
 
-            String username = mUsernameView.getText().toString();
+            String username = mUsernameView.getText().toString().trim();
             String password = null;
             String clientCertificateAlias = null;
 
@@ -661,12 +663,7 @@ public class AccountSetupIncoming extends K9Activity implements OnClickListener 
         }
     };
 
-    OnClientCertificateChangedListener clientCertificateChangedListener = new OnClientCertificateChangedListener() {
-        @Override
-        public void onClientCertificateChanged(String alias) {
-            validateFields();
-        }
-    };
+    OnClientCertificateChangedListener clientCertificateChangedListener = alias -> validateFields();
 
     private AuthType getSelectedAuthType() {
         AuthTypeHolder holder = (AuthTypeHolder) mAuthTypeView.getSelectedItem();

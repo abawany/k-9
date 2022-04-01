@@ -31,7 +31,7 @@ import com.fsck.k9.mailstore.OutboxState;
 import com.fsck.k9.mailstore.OutboxStateRepository;
 import com.fsck.k9.mailstore.SaveMessageDataCreator;
 import com.fsck.k9.mailstore.SendState;
-import com.fsck.k9.mailstore.UnavailableStorageException;
+import com.fsck.k9.mailstore.SpecialLocalFoldersCreator;
 import com.fsck.k9.notification.NotificationController;
 import com.fsck.k9.notification.NotificationStrategy;
 import com.fsck.k9.preferences.Protocols;
@@ -52,16 +52,17 @@ import org.mockito.stubbing.Answer;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.shadows.ShadowLog;
 
+import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.nullable;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyZeroInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 
@@ -84,6 +85,8 @@ public class MessagingControllerTest extends K9RobolectricTest {
     private MessageStoreManager messageStoreManager;
     @Mock
     private SaveMessageDataCreator saveMessageDataCreator;
+    @Mock
+    private SpecialLocalFoldersCreator specialLocalFoldersCreator;
     @Mock
     private SimpleMessagingListener listener;
     @Mock
@@ -140,7 +143,7 @@ public class MessagingControllerTest extends K9RobolectricTest {
 
         controller = new MessagingController(appContext, notificationController, notificationStrategy,
                 localStoreProvider, messageCountsProvider, backendManager, preferences, messageStoreManager,
-                saveMessageDataCreator, Collections.<ControllerExtension>emptyList());
+                saveMessageDataCreator, specialLocalFoldersCreator, Collections.<ControllerExtension>emptyList());
 
         configureAccount();
         configureBackendManager();
@@ -168,13 +171,6 @@ public class MessagingControllerTest extends K9RobolectricTest {
         verify(localFolder).clearAllMessages();
     }
 
-    @Test(expected = UnavailableAccountException.class)
-    public void clearFolderSynchronous_whenStorageUnavailable_shouldThrowUnavailableAccountException() throws MessagingException {
-        doThrow(new UnavailableStorageException("Test")).when(localFolder).open();
-
-        controller.clearFolderSynchronous(account, FOLDER_ID);
-    }
-
     @Test
     public void refreshRemoteSynchronous_shouldCallBackend() throws MessagingException {
         controller.refreshFolderListSynchronous(account);
@@ -183,32 +179,17 @@ public class MessagingControllerTest extends K9RobolectricTest {
     }
 
     @Test
-    public void searchLocalMessagesSynchronous_shouldCallSearchForMessagesOnLocalStore()
-            throws Exception {
-        when(search.searchAllAccounts()).thenReturn(true);
-        when(search.getAccountUuids()).thenReturn(new String[0]);
-
-        controller.searchLocalMessagesSynchronous(search, listener);
-
-        verify(localStore).searchForMessages(nullable(MessageRetrievalListener.class), eq(search));
-    }
-
-    @Test
-    public void searchLocalMessagesSynchronous_shouldNotifyWhenStoreFinishesRetrievingAMessage()
+    public void searchLocalMessages_shouldIgnoreExceptions()
             throws Exception {
         LocalMessage localMessage = mock(LocalMessage.class);
         when(localMessage.getFolder()).thenReturn(localFolder);
         when(search.searchAllAccounts()).thenReturn(true);
         when(search.getAccountUuids()).thenReturn(new String[0]);
-        when(localStore.searchForMessages(nullable(MessageRetrievalListener.class), eq(search)))
-                .thenThrow(new MessagingException("Test"));
+        when(localStore.searchForMessages(search)).thenThrow(new MessagingException("Test"));
 
-        controller.searchLocalMessagesSynchronous(search, listener);
+        List<LocalMessage> messages = controller.searchLocalMessages(search);
 
-        verify(localStore).searchForMessages(messageRetrievalListenerCaptor.capture(), eq(search));
-        messageRetrievalListenerCaptor.getValue().messageFinished(localMessage, 1, 1);
-        verify(listener).listLocalMessagesAddMessages(eq(account),
-                eq((String) null), eq(Collections.singletonList(localMessage)));
+        assertThat(messages).isEmpty();
     }
 
     private void setupRemoteSearch() throws Exception {
@@ -338,7 +319,7 @@ public class MessagingControllerTest extends K9RobolectricTest {
 
         controller.sendPendingMessagesSynchronous(account);
 
-        verifyZeroInteractions(listener);
+        verifyNoMoreInteractions(listener);
     }
 
     @Test
@@ -424,7 +405,7 @@ public class MessagingControllerTest extends K9RobolectricTest {
         when(localStore.getFolder(SENT_FOLDER_ID)).thenReturn(sentFolder);
         when(sentFolder.getDatabaseId()).thenReturn(SENT_FOLDER_ID);
         when(localFolder.exists()).thenReturn(true);
-        when(localFolder.getMessages(null)).thenReturn(Collections.singletonList(localMessageToSend1));
+        when(localFolder.getMessages()).thenReturn(Collections.singletonList(localMessageToSend1));
         when(localMessageToSend1.getUid()).thenReturn("localMessageToSend1");
         when(localMessageToSend1.getDatabaseId()).thenReturn(42L);
         when(localMessageToSend1.getHeader(K9.IDENTITY_HEADER)).thenReturn(new String[]{});

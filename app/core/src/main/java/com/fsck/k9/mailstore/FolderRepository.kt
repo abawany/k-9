@@ -2,6 +2,10 @@ package com.fsck.k9.mailstore
 
 import com.fsck.k9.Account
 import com.fsck.k9.Account.FolderMode
+import com.fsck.k9.DI
+import com.fsck.k9.controller.MessagingController
+import com.fsck.k9.controller.SimpleMessagingListener
+import com.fsck.k9.helper.sendBlockingSilently
 import com.fsck.k9.mail.FolderClass
 import com.fsck.k9.preferences.AccountManager
 import kotlinx.coroutines.CoroutineDispatcher
@@ -16,7 +20,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import com.fsck.k9.mail.FolderType as RemoteFolderType
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -50,6 +53,47 @@ class FolderRepository(
                 starredMessageCount = folder.starredMessageCount
             )
         }.sortedWith(sortForDisplay)
+    }
+
+    fun getDisplayFoldersFlow(account: Account, displayMode: FolderMode): Flow<List<DisplayFolder>> {
+        val messagingController = DI.get<MessagingController>()
+        val messageStore = messageStoreManager.getMessageStore(account)
+
+        return callbackFlow {
+            send(getDisplayFolders(account, displayMode))
+
+            val folderStatusChangedListener = object : SimpleMessagingListener() {
+                override fun folderStatusChanged(statusChangedAccount: Account, folderId: Long) {
+                    if (statusChangedAccount.uuid == account.uuid) {
+                        sendBlockingSilently(getDisplayFolders(account, displayMode))
+                    }
+                }
+            }
+            messagingController.addListener(folderStatusChangedListener)
+
+            val folderSettingsChangedListener = FolderSettingsChangedListener {
+                sendBlockingSilently(getDisplayFolders(account, displayMode))
+            }
+            messageStore.addFolderSettingsChangedListener(folderSettingsChangedListener)
+
+            awaitClose {
+                messagingController.removeListener(folderStatusChangedListener)
+                messageStore.removeFolderSettingsChangedListener(folderSettingsChangedListener)
+            }
+        }.buffer(capacity = Channel.CONFLATED)
+            .distinctUntilChanged()
+            .flowOn(ioDispatcher)
+    }
+
+    fun getDisplayFoldersFlow(account: Account): Flow<List<DisplayFolder>> {
+        return accountManager.getAccountFlow(account.uuid)
+            .map { latestAccount ->
+                AccountContainer(latestAccount, latestAccount.folderDisplayMode)
+            }
+            .distinctUntilChanged()
+            .flatMapLatest { (account, folderDisplayMode) ->
+                getDisplayFoldersFlow(account, folderDisplayMode)
+            }
     }
 
     fun getFolder(account: Account, folderId: Long): Folder? {
@@ -129,9 +173,7 @@ class FolderRepository(
             send(getPushFolders(account, folderMode))
 
             val listener = FolderSettingsChangedListener {
-                launch {
-                    send(getPushFolders(account, folderMode))
-                }
+                sendBlockingSilently(getPushFolders(account, folderMode))
             }
             messageStore.addFolderSettingsChangedListener(listener)
 
@@ -243,6 +285,11 @@ class FolderRepository(
     private val RemoteFolderDetails.effectiveSyncClass: FolderClass
         get() = if (syncClass == FolderClass.INHERITED) displayClass else syncClass
 }
+
+private data class AccountContainer(
+    val account: Account,
+    val folderDisplayMode: FolderMode
+)
 
 data class Folder(val id: Long, val name: String, val type: FolderType, val isLocalOnly: Boolean)
 

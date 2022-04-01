@@ -3,6 +3,7 @@ package com.fsck.k9
 import android.content.Context
 import androidx.annotation.GuardedBy
 import androidx.annotation.RestrictTo
+import com.fsck.k9.helper.sendBlockingSilently
 import com.fsck.k9.mail.MessagingException
 import com.fsck.k9.mailstore.LocalStoreProvider
 import com.fsck.k9.preferences.AccountManager
@@ -18,7 +19,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.channels.sendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
@@ -26,13 +26,13 @@ import kotlinx.coroutines.flow.flowOn
 import timber.log.Timber
 
 class Preferences internal constructor(
-    private val context: Context,
     private val storagePersister: StoragePersister,
     private val localStoreProvider: LocalStoreProvider,
     private val accountPreferenceSerializer: AccountPreferenceSerializer,
     private val backgroundDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AccountManager {
     private val accountLock = Any()
+    private val storageLock = Any()
 
     @GuardedBy("accountLock")
     private var accountsMap: MutableMap<String, Account>? = null
@@ -45,15 +45,22 @@ class Preferences internal constructor(
     private val accountsChangeListeners = CopyOnWriteArraySet<AccountsChangeListener>()
     private val accountRemovedListeners = CopyOnWriteArraySet<AccountRemovedListener>()
 
-    val storage = Storage()
+    @GuardedBy("storageLock")
+    private var currentStorage: Storage? = null
 
-    init {
-        val persistedStorageValues = storagePersister.loadValues()
-        storage.replaceAll(persistedStorageValues)
-    }
+    val storage: Storage
+        get() = synchronized(storageLock) {
+            currentStorage ?: storagePersister.loadValues().also { newStorage ->
+                currentStorage = newStorage
+            }
+        }
 
     fun createStorageEditor(): StorageEditor {
-        return storagePersister.createStorageEditor(storage)
+        return storagePersister.createStorageEditor { updater ->
+            synchronized(storageLock) {
+                currentStorage = updater(storage)
+            }
+        }
     }
 
     @RestrictTo(RestrictTo.Scope.TESTS)
@@ -104,9 +111,6 @@ class Preferences internal constructor(
             }
         }
 
-    val availableAccounts: Collection<Account>
-        get() = accounts.filter { it.isAvailable(context) }
-
     override fun getAccount(accountUuid: String): Account? {
         synchronized(accountLock) {
             if (accountsMap == null) {
@@ -119,21 +123,39 @@ class Preferences internal constructor(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun getAccountFlow(accountUuid: String): Flow<Account> {
-        return callbackFlow<Account> {
-            val initialAccount = getAccount(accountUuid) ?: return@callbackFlow
+        return callbackFlow {
+            val initialAccount = getAccount(accountUuid)
+            if (initialAccount == null) {
+                close()
+                return@callbackFlow
+            }
+
             send(initialAccount)
 
             val listener = AccountsChangeListener {
                 val account = getAccount(accountUuid)
                 if (account != null) {
-                    try {
-                        sendBlocking(account)
-                    } catch (e: Exception) {
-                        Timber.w(e, "Error while trying to send to channel")
-                    }
+                    sendBlockingSilently(account)
                 } else {
-                    channel.close()
+                    close()
                 }
+            }
+            addOnAccountsChangeListener(listener)
+
+            awaitClose {
+                removeOnAccountsChangeListener(listener)
+            }
+        }.buffer(capacity = Channel.CONFLATED)
+            .flowOn(backgroundDispatcher)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getAccountsFlow(): Flow<List<Account>> {
+        return callbackFlow {
+            send(accounts)
+
+            val listener = AccountsChangeListener {
+                sendBlockingSilently(accounts)
             }
             addOnAccountsChangeListener(listener)
 
@@ -176,35 +198,18 @@ class Preferences internal constructor(
         notifyAccountsChangeListeners()
     }
 
-    var defaultAccount: Account?
-        get() {
-            return getDefaultAccountOrNull() ?: availableAccounts.firstOrNull()?.also { newDefaultAccount ->
-                defaultAccount = newDefaultAccount
-            }
-        }
-        set(account) {
-            requireNotNull(account)
-
-            createStorageEditor()
-                .putString("defaultAccountUuid", account.uuid)
-                .commit()
-        }
-
-    private fun getDefaultAccountOrNull(): Account? {
-        return synchronized(accountLock) {
-            storage.getString("defaultAccountUuid", null)?.let { defaultAccountUuid ->
-                getAccount(defaultAccountUuid)
-            }
-        }
-    }
+    val defaultAccount: Account?
+        get() = accounts.firstOrNull()
 
     fun saveAccount(account: Account) {
         ensureAssignedAccountNumber(account)
         processChangedValues(account)
 
-        val editor = createStorageEditor()
-        accountPreferenceSerializer.save(editor, storage, account)
-        editor.commit()
+        synchronized(accountLock) {
+            val editor = createStorageEditor()
+            accountPreferenceSerializer.save(editor, storage, account)
+            editor.commit()
+        }
 
         notifyAccountsChangeListeners()
     }

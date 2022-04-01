@@ -32,6 +32,7 @@ import com.fsck.k9.mail.ServerSettings;
 import com.fsck.k9.mailstore.SpecialLocalFoldersCreator;
 import com.fsck.k9.ui.R;
 import com.fsck.k9.ui.ConnectionSettings;
+import com.fsck.k9.ui.settings.ExtraAccountDiscovery;
 import com.fsck.k9.view.ClientCertificateSpinner;
 import com.fsck.k9.view.ClientCertificateSpinner.OnClientCertificateChangedListener;
 import com.google.android.material.textfield.TextInputEditText;
@@ -196,7 +197,7 @@ public class AccountSetupBasics extends K9Activity
     private String getOwnerName() {
         String name = null;
         try {
-            name = getDefaultAccountName();
+            name = getDefaultSenderName();
         } catch (Exception e) {
             Timber.e(e, "Could not get default account name");
         }
@@ -207,11 +208,11 @@ public class AccountSetupBasics extends K9Activity
         return name;
     }
 
-    private String getDefaultAccountName() {
+    private String getDefaultSenderName() {
         String name = null;
         Account account = Preferences.getPreferences(this).getDefaultAccount();
         if (account != null) {
-            name = account.getName();
+            name = account.getSenderName();
         }
         return name;
     }
@@ -225,7 +226,7 @@ public class AccountSetupBasics extends K9Activity
             mAccount.setChipColor(accountCreator.pickColor());
         }
 
-        mAccount.setName(getOwnerName());
+        mAccount.setSenderName(getOwnerName());
         mAccount.setEmail(email);
 
         ServerSettings incomingServerSettings = connectionSettings.getIncoming().newPassword(password);
@@ -280,6 +281,12 @@ public class AccountSetupBasics extends K9Activity
 
         String email = mEmailView.getText().toString();
 
+        ConnectionSettings extraConnectionSettings = ExtraAccountDiscovery.discover(email);
+        if (extraConnectionSettings != null) {
+            finishAutoSetup(extraConnectionSettings);
+            return;
+        }
+
         ConnectionSettings connectionSettings = providersXmlDiscoveryDiscover(email, DiscoveryTarget.INCOMING_AND_OUTGOING);
         if (connectionSettings != null) {
             finishAutoSetup(connectionSettings);
@@ -303,7 +310,7 @@ public class AccountSetupBasics extends K9Activity
                 AccountSetupCheckSettings.actionCheckSettings(this, mAccount, CheckDirection.OUTGOING);
             } else {
                 //We've successfully checked outgoing as well.
-                mAccount.setDescription(mAccount.getEmail());
+                mAccount.setName(mAccount.getEmail());
                 Preferences.getPreferences(this).saveAccount(mAccount);
                 Core.setServicesEnabled(this);
                 AccountSetupNames.actionSetNames(this, mAccount);
@@ -332,7 +339,7 @@ public class AccountSetupBasics extends K9Activity
             mAccount = Preferences.getPreferences(this).newAccount();
             mAccount.setChipColor(accountCreator.pickColor());
         }
-        mAccount.setName(getOwnerName());
+        mAccount.setSenderName(getOwnerName());
         mAccount.setEmail(email);
 
         InitialAccountSettings initialAccountSettings = new InitialAccountSettings(authenticationType, email, password,

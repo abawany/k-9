@@ -58,6 +58,7 @@ class UnreadWidgetConfigurationFragment : PreferenceFragmentCompat() {
         unreadFolder.onPreferenceClickListener = Preference.OnPreferenceClickListener {
             val intent = ChooseFolderActivity.buildLaunchIntent(
                 context = requireContext(),
+                action = ChooseFolderActivity.Action.CHOOSE,
                 accountUuid = selectedAccountUuid!!,
                 showDisplayableOnly = true
             )
@@ -138,10 +139,7 @@ class UnreadWidgetConfigurationFragment : PreferenceFragmentCompat() {
         val selectedAccount = preferences.getAccount(selectedAccountUuid!!)
             ?: error("Account $selectedAccountUuid not found")
 
-        val accountDescription: String? = selectedAccount.description
-        val summary = if (accountDescription.isNullOrEmpty()) selectedAccount.email else accountDescription
-
-        unreadAccount.summary = summary
+        unreadAccount.summary = selectedAccount.displayName
         unreadFolderEnabled.isEnabled = true
         unreadFolder.isEnabled = true
     }

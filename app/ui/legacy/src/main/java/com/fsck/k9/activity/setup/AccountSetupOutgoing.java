@@ -2,6 +2,8 @@
 package com.fsck.k9.activity.setup;
 
 
+import java.util.Locale;
+
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
@@ -20,6 +22,7 @@ import android.widget.CompoundButton.OnCheckedChangeListener;
 import android.widget.Spinner;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import com.fsck.k9.Account;
 import com.fsck.k9.DI;
 import com.fsck.k9.LocalKeyStoreManager;
@@ -45,7 +48,6 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
     OnCheckedChangeListener {
     private static final String EXTRA_ACCOUNT = "account";
 
-    private static final String EXTRA_MAKE_DEFAULT = "makeDefault";
     private static final String STATE_SECURITY_TYPE_POSITION = "stateSecurityTypePosition";
     private static final String STATE_AUTH_TYPE_POSITION = "authTypePosition";
 
@@ -70,12 +72,10 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
     private AuthTypeAdapter mAuthTypeAdapter;
     private Button mNextButton;
     private Account mAccount;
-    private boolean mMakeDefault;
 
-    public static void actionOutgoingSettings(Context context, Account account, boolean makeDefault) {
+    public static void actionOutgoingSettings(Context context, Account account) {
         Intent i = new Intent(context, AccountSetupOutgoing.class);
         i.putExtra(EXTRA_ACCOUNT, account.getUuid());
-        i.putExtra(EXTRA_MAKE_DEFAULT, makeDefault);
         context.startActivity(i);
     }
 
@@ -138,7 +138,6 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
         //FIXME: get Account object again?
         accountUuid = getIntent().getStringExtra(EXTRA_ACCOUNT);
         mAccount = Preferences.getPreferences(this).getAccount(accountUuid);
-        mMakeDefault = getIntent().getBooleanExtra(EXTRA_MAKE_DEFAULT, false);
 
         /*
          * If we're being reloaded we override the original account with the one
@@ -191,7 +190,7 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
             }
             mSecurityTypeView.setSelection(mCurrentSecurityTypeViewPosition, false);
 
-            if (settings.username != null && !settings.username.isEmpty()) {
+            if (!settings.username.isEmpty()) {
                 mUsernameView.setText(settings.username);
                 mRequireLoginView.setChecked(true);
                 mRequireLoginSettingsView.setVisibility(View.VISIBLE);
@@ -210,7 +209,7 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
             }
 
             if (settings.port != -1) {
-                mPortView.setText(String.format("%d", settings.port));
+                mPortView.setText(String.format(Locale.ROOT, "%d", settings.port));
             } else {
                 updatePortFromSecurityType();
             }
@@ -318,7 +317,7 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
     }
 
     @Override
-    public void onSaveInstanceState(Bundle outState) {
+    public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putString(EXTRA_ACCOUNT, mAccount.getUuid());
         outState.putInt(STATE_SECURITY_TYPE_POSITION, mCurrentSecurityTypeViewPosition);
@@ -477,7 +476,7 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
                 Preferences.getPreferences(getApplicationContext()).saveAccount(mAccount);
                 finish();
             } else {
-                AccountSetupOptions.actionOptions(this, mAccount, mMakeDefault);
+                AccountSetupOptions.actionOptions(this, mAccount);
             }
         }
     }
@@ -493,7 +492,7 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
             clientCertificateAlias = mClientCertificateSpinner.getAlias();
         }
         if (mRequireLoginView.isChecked()) {
-            username = mUsernameView.getText().toString();
+            username = mUsernameView.getText().toString().trim();
             authType = getSelectedAuthType();
 
             if (AuthType.EXTERNAL != authType) {
@@ -545,12 +544,7 @@ public class AccountSetupOutgoing extends K9Activity implements OnClickListener,
         }
     };
 
-    OnClientCertificateChangedListener clientCertificateChangedListener = new OnClientCertificateChangedListener() {
-        @Override
-        public void onClientCertificateChanged(String alias) {
-            validateFields();
-        }
-    };
+    OnClientCertificateChangedListener clientCertificateChangedListener = alias -> validateFields();
 
     private AuthType getSelectedAuthType() {
         AuthTypeHolder holder = (AuthTypeHolder) mAuthTypeView.getSelectedItem();

@@ -475,8 +475,7 @@ class RealImapFolderTest {
 
         val messages = folder.getMessages(1, 10, null, listener)
 
-        verify(listener).messageStarted("99", 0, 1)
-        verify(listener).messageFinished(messages[0], 0, 1)
+        verify(listener).messageFinished(messages[0])
         verifyNoMoreInteractions(listener)
     }
 
@@ -563,8 +562,7 @@ class RealImapFolderTest {
 
         val messages = folder.getMessages(setOf(1L), true, listener)
 
-        verify(listener).messageStarted("99", 0, 1)
-        verify(listener).messageFinished(messages[0], 0, 1)
+        verify(listener).messageFinished(messages[0])
         verifyNoMoreInteractions(listener)
     }
 
@@ -796,7 +794,7 @@ class RealImapFolderTest {
         val part = createPart("TEXT")
         whenever(imapConnection.readResponse(anyOrNull())).thenReturn(createImapResponse("x OK"))
 
-        folder.fetchPart(message, part, null, mock(), 4096)
+        folder.fetchPart(message, part, mock(), 4096)
 
         verify(imapConnection).sendCommand("UID FETCH 1 (UID BODY.PEEK[TEXT]<0.4096>)", false)
     }
@@ -810,7 +808,7 @@ class RealImapFolderTest {
         val part = createPart("1.1")
         whenever(imapConnection.readResponse(anyOrNull())).thenReturn(createImapResponse("x OK"))
 
-        folder.fetchPart(message, part, null, mock(), MAX_DOWNLOAD_SIZE)
+        folder.fetchPart(message, part, mock(), MAX_DOWNLOAD_SIZE)
 
         verify(imapConnection).sendCommand("UID FETCH 1 (UID BODY.PEEK[1.1])", false)
     }
@@ -824,7 +822,7 @@ class RealImapFolderTest {
         val part = createPlainTextPart("1.1")
         setupSingleFetchResponseToCallback()
 
-        folder.fetchPart(message, part, null, DefaultBodyFactory(), MAX_DOWNLOAD_SIZE)
+        folder.fetchPart(message, part, DefaultBodyFactory(), MAX_DOWNLOAD_SIZE)
 
         val bodyArgumentCaptor = argumentCaptor<Body>()
         verify(part).body = bodyArgumentCaptor.capture()

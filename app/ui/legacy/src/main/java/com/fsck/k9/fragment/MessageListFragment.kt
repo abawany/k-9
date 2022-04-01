@@ -70,6 +70,7 @@ class MessageListFragment :
     private val folderNameFormatter: FolderNameFormatter by lazy { folderNameFormatterFactory.create(requireContext()) }
     private val messagingController: MessagingController by inject()
     private val preferences: Preferences by inject()
+    private val clock: Clock by inject()
 
     private val handler = MessageListHandler(this)
     private val activityListener = MessageListActivityListener()
@@ -122,6 +123,9 @@ class MessageListFragment :
     private val isUnifiedInbox: Boolean
         get() = localSearch.id == SearchAccount.UNIFIED_INBOX
 
+    private val isNewMessagesView: Boolean
+        get() = localSearch.id == SearchAccount.NEW_MESSAGES
+
     /**
      * `true` after [.onCreate] was executed. Used in [.updateTitle] to
      * make sure we don't access member variables before initialization is complete.
@@ -143,7 +147,7 @@ class MessageListFragment :
         super.onCreate(savedInstanceState)
 
         restoreInstanceState(savedInstanceState)
-        decodeArguments()
+        decodeArguments() ?: return
 
         viewModel.getMessageListLiveData().observe(this) { messageListInfo: MessageListInfo ->
             setMessageList(messageListInfo)
@@ -173,7 +177,7 @@ class MessageListFragment :
         listView.onRestoreInstanceState(savedListState)
     }
 
-    private fun decodeArguments() {
+    private fun decodeArguments(): MessageListFragment? {
         val arguments = requireArguments()
         showingThreadedList = arguments.getBoolean(ARG_THREADED_LIST, false)
         isThreadDisplay = arguments.getBoolean(ARG_IS_THREAD_DISPLAY, false)
@@ -194,10 +198,17 @@ class MessageListFragment :
 
         isSingleFolderMode = false
         if (isSingleAccountMode && localSearch.folderIds.size == 1) {
-            isSingleFolderMode = true
-            val folderId = localSearch.folderIds[0]
-            currentFolder = getFolderInfoHolder(folderId, account!!)
+            try {
+                val folderId = localSearch.folderIds[0]
+                currentFolder = getFolderInfoHolder(folderId, account!!)
+                isSingleFolderMode = true
+            } catch (e: MessagingException) {
+                fragmentListener.onFolderNotFoundError()
+                return null
+            }
         }
+
+        return this
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
@@ -252,7 +263,7 @@ class MessageListFragment :
             contactsPictureLoader = ContactPicture.getContactPictureLoader(),
             listItemListener = this,
             appearance = messageListAppearance,
-            relativeDateTimeFormatter = RelativeDateTimeFormatter(requireContext(), Clock.INSTANCE)
+            relativeDateTimeFormatter = RelativeDateTimeFormatter(requireContext(), clock)
         )
 
         adapter.activeMessage = activeMessage
@@ -325,6 +336,7 @@ class MessageListFragment :
     private fun setWindowTitle() {
         val title = when {
             isUnifiedInbox -> getString(R.string.integrated_inbox_title)
+            isNewMessagesView -> getString(R.string.new_messages_title)
             isManualSearch -> getString(R.string.search_results)
             isThreadDisplay -> threadTitle ?: ""
             isSingleFolderMode -> currentFolder!!.displayName
@@ -335,7 +347,7 @@ class MessageListFragment :
             if (account == null || isUnifiedInbox || preferences.accounts.size == 1) {
                 null
             } else {
-                account.description
+                account.displayName
             }
         }
 
@@ -412,6 +424,10 @@ class MessageListFragment :
     }
 
     override fun onDestroyView() {
+        if (isNewMessagesView && !requireActivity().isChangingConfigurations) {
+            messagingController.clearNewMessages(account)
+        }
+
         savedListState = listView.onSaveInstanceState()
         super.onDestroyView()
     }
@@ -449,12 +465,8 @@ class MessageListFragment :
         )
 
     private fun getFolderInfoHolder(folderId: Long, account: Account): FolderInfoHolder {
-        return try {
-            val localFolder = MlfUtils.getOpenFolder(folderId, account)
-            FolderInfoHolder(folderNameFormatter, localFolder, account)
-        } catch (e: MessagingException) {
-            throw RuntimeException(e)
-        }
+        val localFolder = MlfUtils.getOpenFolder(folderId, account)
+        return FolderInfoHolder(folderNameFormatter, localFolder, account)
     }
 
     override fun onResume() {
@@ -465,10 +477,6 @@ class MessageListFragment :
         }
 
         messagingController.addListener(activityListener)
-
-        for (account in localSearch.getAccounts(preferences)) {
-            messagingController.cancelNotificationsForAccount(account)
-        }
 
         updateTitle()
     }
@@ -985,7 +993,14 @@ class MessageListFragment :
             else -> null
         }
 
-        displayFolderChoice(ACTIVITY_CHOOSE_FOLDER_MOVE, folderId, messages.first().accountUuid, null, messages)
+        displayFolderChoice(
+            operation = FolderOperation.MOVE,
+            requestCode = ACTIVITY_CHOOSE_FOLDER_MOVE,
+            sourceFolderId = folderId,
+            accountUuid = messages.first().accountUuid,
+            lastSelectedFolderId = null,
+            messages = messages
+        )
     }
 
     private fun onCopy(message: MessageReference) {
@@ -1001,18 +1016,31 @@ class MessageListFragment :
             else -> null
         }
 
-        displayFolderChoice(ACTIVITY_CHOOSE_FOLDER_COPY, folderId, messages.first().accountUuid, null, messages)
+        displayFolderChoice(
+            operation = FolderOperation.COPY,
+            requestCode = ACTIVITY_CHOOSE_FOLDER_COPY,
+            sourceFolderId = folderId,
+            accountUuid = messages.first().accountUuid,
+            lastSelectedFolderId = null,
+            messages = messages
+        )
     }
 
     private fun displayFolderChoice(
+        operation: FolderOperation,
         requestCode: Int,
         sourceFolderId: Long?,
         accountUuid: String,
         lastSelectedFolderId: Long?,
         messages: List<MessageReference>
     ) {
+        val action = when (operation) {
+            FolderOperation.COPY -> ChooseFolderActivity.Action.COPY
+            FolderOperation.MOVE -> ChooseFolderActivity.Action.MOVE
+        }
         val intent = ChooseFolderActivity.buildLaunchIntent(
             context = requireContext(),
+            action = action,
             accountUuid = accountUuid,
             currentFolderId = sourceFolderId,
             scrollToFolderId = lastSelectedFolderId,
@@ -1159,14 +1187,14 @@ class MessageListFragment :
     private fun checkMail() {
         if (isSingleAccountMode && isSingleFolderMode) {
             val folderId = currentFolder!!.databaseId
-            messagingController.synchronizeMailbox(account, folderId, activityListener)
+            messagingController.synchronizeMailbox(account, folderId, false, activityListener)
             messagingController.sendPendingMessages(account, activityListener)
         } else if (allAccounts) {
-            messagingController.checkMail(null, true, true, activityListener)
+            messagingController.checkMail(null, true, true, false, activityListener)
         } else {
             for (accountUuid in accountUuids) {
                 val account = preferences.getAccount(accountUuid)
-                messagingController.checkMail(account, true, true, activityListener)
+                messagingController.checkMail(account, true, true, false, activityListener)
             }
         }
     }
@@ -1254,7 +1282,7 @@ class MessageListFragment :
 
     private fun getReferenceForPosition(position: Int): MessageReference {
         val item = adapter.getItem(position)
-        return MessageReference(item.account.uuid, item.folderId, item.messageUid, null)
+        return MessageReference(item.account.uuid, item.folderId, item.messageUid)
     }
 
     private fun openMessageAtPosition(position: Int) {
@@ -1309,7 +1337,7 @@ class MessageListFragment :
             return adapter.messages
                 .asSequence()
                 .filter { it.uniqueId in selected }
-                .map { MessageReference(it.account.uuid, it.folderId, it.messageUid, null) }
+                .map { MessageReference(it.account.uuid, it.folderId, it.messageUid) }
                 .toList()
         }
 
@@ -1411,7 +1439,7 @@ class MessageListFragment :
     }
 
     val isRemoteSearchAllowed: Boolean
-        get() = isManualSearch && !isRemoteSearch && isSingleFolderMode && account?.isAllowRemoteSearch == true
+        get() = isManualSearch && !isRemoteSearch && isSingleFolderMode && messagingController.isPushCapable(account)
 
     fun onSearchRequested(query: String): Boolean {
         val folderId = currentFolder?.databaseId
@@ -1901,6 +1929,7 @@ class MessageListFragment :
         fun remoteSearchStarted()
         fun goBack()
         fun updateMenu()
+        fun onFolderNotFoundError()
 
         companion object {
             const val MAX_PROGRESS = 10000

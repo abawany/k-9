@@ -7,10 +7,6 @@ class TestCoreResourceProvider : CoreResourceProvider {
 
     override fun defaultIdentityDescription() = throw UnsupportedOperationException("not implemented")
 
-    override fun internalStorageProviderName() = throw UnsupportedOperationException("not implemented")
-
-    override fun externalStorageProviderName() = throw UnsupportedOperationException("not implemented")
-
     override fun contactDisplayNamePrefix() = throw UnsupportedOperationException("not implemented")
     override fun contactUnknownSender() = throw UnsupportedOperationException("not implemented")
     override fun contactUnknownRecipient() = throw UnsupportedOperationException("not implemented")
@@ -30,8 +26,6 @@ class TestCoreResourceProvider : CoreResourceProvider {
     override fun replyHeader(sender: String) = throw UnsupportedOperationException("not implemented")
     override fun replyHeader(sender: String, sentDate: String) = throw UnsupportedOperationException("not implemented")
 
-    override fun searchAllMessagesTitle() = throw UnsupportedOperationException("not implemented")
-    override fun searchAllMessagesDetail() = throw UnsupportedOperationException("not implemented")
     override fun searchUnifiedInboxTitle() = throw UnsupportedOperationException("not implemented")
     override fun searchUnifiedInboxDetail() = throw UnsupportedOperationException("not implemented")
 

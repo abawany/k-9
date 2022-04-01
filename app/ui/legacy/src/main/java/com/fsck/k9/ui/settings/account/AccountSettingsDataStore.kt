@@ -3,20 +3,26 @@ package com.fsck.k9.ui.settings.account
 import androidx.preference.PreferenceDataStore
 import com.fsck.k9.Account
 import com.fsck.k9.Account.SpecialFolderSelection
+import com.fsck.k9.NotificationLight
+import com.fsck.k9.NotificationVibration
 import com.fsck.k9.Preferences
 import com.fsck.k9.job.K9JobManager
+import com.fsck.k9.notification.NotificationChannelManager
+import com.fsck.k9.notification.NotificationController
 import java.util.concurrent.ExecutorService
 
 class AccountSettingsDataStore(
     private val preferences: Preferences,
     private val executorService: ExecutorService,
     private val account: Account,
-    private val jobManager: K9JobManager
+    private val jobManager: K9JobManager,
+    private val notificationChannelManager: NotificationChannelManager,
+    private val notificationController: NotificationController
 ) : PreferenceDataStore() {
+    private var notificationSettingsChanged = false
 
     override fun getBoolean(key: String, defValue: Boolean): Boolean {
         return when (key) {
-            "account_default" -> account == preferences.defaultAccount
             "mark_message_as_read_on_view" -> account.isMarkMessageAsReadOnView
             "mark_message_as_read_on_delete" -> account.isMarkMessageAsReadOnDelete
             "account_sync_remote_deletetions" -> account.isSyncRemoteDeletions
@@ -28,13 +34,10 @@ class AccountSettingsDataStore(
             "account_notify" -> account.isNotifyNewMail
             "account_notify_self" -> account.isNotifySelfNewMail
             "account_notify_contacts_mail_only" -> account.isNotifyContactsMailOnly
-            "account_vibrate" -> account.notificationSetting.isVibrateEnabled
-            "account_led" -> account.notificationSetting.isLedEnabled
             "account_notify_sync" -> account.isNotifySync
             "openpgp_hide_sign_only" -> account.isOpenPgpHideSignOnly
             "openpgp_encrypt_subject" -> account.isOpenPgpEncryptSubject
             "openpgp_encrypt_all_drafts" -> account.isOpenPgpEncryptAllDrafts
-            "remote_search_enabled" -> account.isAllowRemoteSearch
             "autocrypt_prefer_encrypt" -> account.autocryptPreferEncryptMutual
             "upload_sent_messages" -> account.isUploadSentMessages
             "ignore_chat_messages" -> account.isIgnoreChatMessages
@@ -44,12 +47,6 @@ class AccountSettingsDataStore(
 
     override fun putBoolean(key: String, value: Boolean) {
         when (key) {
-            "account_default" -> {
-                executorService.execute {
-                    preferences.defaultAccount = account
-                }
-                return
-            }
             "mark_message_as_read_on_view" -> account.isMarkMessageAsReadOnView = value
             "mark_message_as_read_on_delete" -> account.isMarkMessageAsReadOnDelete = value
             "account_sync_remote_deletetions" -> account.isSyncRemoteDeletions = value
@@ -61,10 +58,7 @@ class AccountSettingsDataStore(
             "account_notify" -> account.isNotifyNewMail = value
             "account_notify_self" -> account.isNotifySelfNewMail = value
             "account_notify_contacts_mail_only" -> account.isNotifyContactsMailOnly = value
-            "account_vibrate" -> account.notificationSetting.isVibrateEnabled = value
-            "account_led" -> account.notificationSetting.setLed(value)
             "account_notify_sync" -> account.isNotifySync = value
-            "remote_search_enabled" -> account.isAllowRemoteSearch = value
             "openpgp_hide_sign_only" -> account.isOpenPgpHideSignOnly = value
             "openpgp_encrypt_subject" -> account.isOpenPgpEncryptSubject = value
             "openpgp_encrypt_all_drafts" -> account.isOpenPgpEncryptAllDrafts = value
@@ -80,15 +74,13 @@ class AccountSettingsDataStore(
     override fun getInt(key: String?, defValue: Int): Int {
         return when (key) {
             "chip_color" -> account.chipColor
-            "led_color" -> account.notificationSetting.ledColor
             else -> defValue
         }
     }
 
     override fun putInt(key: String?, value: Int) {
         when (key) {
-            "chip_color" -> account.chipColor = value
-            "led_color" -> account.notificationSetting.ledColor = value
+            "chip_color" -> setAccountColor(value)
             else -> return
         }
 
@@ -113,7 +105,7 @@ class AccountSettingsDataStore(
 
     override fun getString(key: String, defValue: String?): String? {
         return when (key) {
-            "account_description" -> account.description
+            "account_description" -> account.name
             "show_pictures_enum" -> account.showPictures.name
             "account_display_count" -> account.displayCount.toString()
             "account_message_age" -> account.maximumPolledMessageAge.toString()
@@ -140,10 +132,10 @@ class AccountSettingsDataStore(
             "spam_folder" -> loadSpecialFolder(account.spamFolderId, account.spamFolderSelection)
             "trash_folder" -> loadSpecialFolder(account.trashFolderId, account.trashFolderSelection)
             "folder_notify_new_mail_mode" -> account.folderNotifyNewMailMode.name
-            "account_vibrate_pattern" -> account.notificationSetting.vibratePattern.toString()
-            "account_vibrate_times" -> account.notificationSetting.vibrateTimes.toString()
+            "account_combined_vibration" -> getCombinedVibrationValue()
             "account_remote_search_num_results" -> account.remoteSearchNumResults.toString()
-            "account_ringtone" -> account.notificationSetting.ringtone
+            "account_ringtone" -> account.notificationSettings.ringtone
+            "notification_light" -> account.notificationSettings.light.name
             else -> defValue
         }
     }
@@ -152,18 +144,18 @@ class AccountSettingsDataStore(
         if (value == null) return
 
         when (key) {
-            "account_description" -> account.description = value
+            "account_description" -> account.name = value
             "show_pictures_enum" -> account.showPictures = Account.ShowPictures.valueOf(value)
             "account_display_count" -> account.displayCount = value.toInt()
             "account_message_age" -> account.maximumPolledMessageAge = value.toInt()
             "account_autodownload_size" -> account.maximumAutoDownloadMessageSize = value.toInt()
             "account_check_frequency" -> {
-                if (account.setAutomaticCheckIntervalMinutes(value.toInt())) {
+                if (account.updateAutomaticCheckIntervalMinutes(value.toInt())) {
                     reschedulePoll()
                 }
             }
             "folder_sync_mode" -> {
-                if (account.setFolderSyncMode(Account.FolderMode.valueOf(value))) {
+                if (account.updateFolderSyncMode(Account.FolderMode.valueOf(value))) {
                     reschedulePoll()
                 }
             }
@@ -185,21 +177,51 @@ class AccountSettingsDataStore(
             "spam_folder" -> saveSpecialFolderSelection(value, account::setSpamFolderId)
             "trash_folder" -> saveSpecialFolderSelection(value, account::setTrashFolderId)
             "folder_notify_new_mail_mode" -> account.folderNotifyNewMailMode = Account.FolderMode.valueOf(value)
-            "account_vibrate_pattern" -> account.notificationSetting.vibratePattern = value.toInt()
-            "account_vibrate_times" -> account.notificationSetting.vibrateTimes = value.toInt()
+            "account_combined_vibration" -> setCombinedVibrationValue(value)
             "account_remote_search_num_results" -> account.remoteSearchNumResults = value.toInt()
-            "account_ringtone" -> with(account.notificationSetting) {
-                isRingEnabled = true
-                ringtone = value
-            }
+            "account_ringtone" -> setNotificationSound(value)
+            "notification_light" -> setNotificationLight(value)
             else -> return
         }
 
         saveSettingsInBackground()
     }
 
+    private fun setAccountColor(color: Int) {
+        if (color != account.chipColor) {
+            account.chipColor = color
+
+            if (account.notificationSettings.light == NotificationLight.AccountColor) {
+                notificationSettingsChanged = true
+            }
+        }
+    }
+
+    private fun setNotificationSound(value: String) {
+        account.notificationSettings.let { notificationSettings ->
+            if (!notificationSettings.isRingEnabled || notificationSettings.ringtone != value) {
+                account.updateNotificationSettings { it.copy(isRingEnabled = true, ringtone = value) }
+                notificationSettingsChanged = true
+            }
+        }
+    }
+
+    private fun setNotificationLight(value: String) {
+        val light = NotificationLight.valueOf(value)
+        if (light != account.notificationSettings.light) {
+            account.updateNotificationSettings { it.copy(light = light) }
+            notificationSettingsChanged = true
+        }
+    }
+
     fun saveSettingsInBackground() {
         executorService.execute {
+            if (notificationSettingsChanged) {
+                notificationChannelManager.recreateMessagesNotificationChannel(account)
+                notificationController.restoreNewMailNotifications(listOf(account))
+            }
+
+            notificationSettingsChanged = false
             saveSettings()
         }
     }
@@ -239,5 +261,29 @@ class AccountSettingsDataStore(
         }
 
         return prefix + (specialFolderId?.toString() ?: FolderListPreference.NO_FOLDER_VALUE)
+    }
+
+    private fun getCombinedVibrationValue(): String {
+        return with(account.notificationSettings.vibration) {
+            VibrationPreference.encode(
+                isVibrationEnabled = isEnabled,
+                vibratePattern = pattern,
+                vibrationTimes = repeatCount
+            )
+        }
+    }
+
+    private fun setCombinedVibrationValue(value: String) {
+        val (isVibrationEnabled, vibrationPattern, vibrationTimes) = VibrationPreference.decode(value)
+        account.updateNotificationSettings { notificationSettings ->
+            notificationSettings.copy(
+                vibration = NotificationVibration(
+                    isEnabled = isVibrationEnabled,
+                    pattern = vibrationPattern,
+                    repeatCount = vibrationTimes,
+                )
+            )
+        }
+        notificationSettingsChanged = true
     }
 }

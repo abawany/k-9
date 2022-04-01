@@ -176,17 +176,18 @@
         <item>5</item>
     </string-array>
 
-    <string-array name="vibrate_times_label" translatable="false">
-        <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-        <item>5</item>
-        <item>6</item>
-        <item>7</item>
-        <item>8</item>
-        <item>9</item>
-        <item>10</item>
+    <!-- Must be kept in sync with `NotificationLight` enum -->
+    <string-array name="notification_light_values" translatable="false">
+        <item>Disabled</item>
+        <item>AccountColor</item>
+        <item>SystemDefaultColor</item>
+        <item>White</item>
+        <item>Red</item>
+        <item>Green</item>
+        <item>Blue</item>
+        <item>Yellow</item>
+        <item>Cyan</item>
+        <item>Magenta</item>
     </string-array>
 
     <string-array name="quote_style_values" translatable="false">

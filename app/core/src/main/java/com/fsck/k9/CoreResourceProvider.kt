@@ -6,9 +6,6 @@ interface CoreResourceProvider {
     fun defaultSignature(): String
     fun defaultIdentityDescription(): String
 
-    fun internalStorageProviderName(): String
-    fun externalStorageProviderName(): String
-
     fun contactDisplayNamePrefix(): String
     fun contactUnknownSender(): String
     fun contactUnknownRecipient(): String
@@ -27,8 +24,6 @@ interface CoreResourceProvider {
     fun replyHeader(sender: String): String
     fun replyHeader(sender: String, sentDate: String): String
 
-    fun searchAllMessagesTitle(): String
-    fun searchAllMessagesDetail(): String
     fun searchUnifiedInboxTitle(): String
     fun searchUnifiedInboxDetail(): String
 

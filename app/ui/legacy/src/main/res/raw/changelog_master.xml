@@ -5,6 +5,125 @@
      Locale-specific versions are kept in res/raw-<locale qualifier>/changelog.xml.
 -->
 <changelog>
+    <release version="5.914" versioncode="29014" date="2022-03-24">
+        <change>The name and description of notification categories are now updated when the app language is changed</change>
+        <change>Fixed bug where notification settings might not have been properly restored on settings import</change>
+        <change>Fixed a crash when tapping the unread widget tries to open a folder that no longer exists</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.913" versioncode="29013" date="2022-03-11">
+        <change>Don't create notifications when manually refreshing the message list</change>
+        <change>Fixed import and export of notification settings</change>
+        <change>Fixed bug that could lead to multiple notifications being created for the same message</change>
+        <change>Fixed bug that sometimes crashed the app after changing the notification sound</change>
+        <change>Added support for messages that specified the character set in multiple ways</change>
+        <change>A lot of internal improvements</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.912" versioncode="29012" date="2022-02-22">
+        <change>Fixed bugs where notifications weren't removed when they should have been</change>
+        <change>Added a setting to configure the notification sound on Android 8+ (because some vendor-specific Android versions removed this feature from their user interface)</change>
+        <change>Automatically recover in situations where messages can't be sent because the Outbox folder is missing</change>
+        <change>Added more logging around 'new message' notifications</change>
+        <change>Always prompt which app to use when sharing links</change>
+        <change>Removed the the button bar in the drawer and switched back to the sticky footer</change>
+        <change>Don't expose MessageProvider to third-party apps</change>
+        <change>Updated the app to target the Android 12 API</change>
+    </release>
+    <release version="5.911" versioncode="29011" date="2022-02-12">
+        <change>Reworked the user interface for the vibration pattern setting</change>
+        <change>Reworked the notification light color setting</change>
+        <change>Improved display of accounts without a name</change>
+        <change>Tapping a "send failure" notification will now open the Outbox folder</change>
+        <change>Fixed bug that led to some messages not being displayed properly</change>
+        <change>Fixed various smaller bugs related to notifications</change>
+        <change>Changed the way settings are stored; this might fix the bug where all accounts are lost</change>
+    </release>
+    <release version="5.910" versioncode="29010" date="2022-01-25">
+        <change>POP3: Changed the way the list of supported authentication methods is retrieved from the server</change>
+        <change>IMAP: Removed setting to enable remote search (it's now enabled by default; still requires an additional button press)</change>
+        <change>Changed the default color for registered contacts to provide good contrast with both light and dark themes</change>
+        <change>Fixed search by sender name</change>
+        <change>Ignore spaces at the end of the username inserted by some software keyboards when using auto-completion</change>
+    </release>
+    <release version="5.909" versioncode="29009" date="2022-01-12">
+        <change>Only remove notifications for messages currently being displayed</change>
+        <change>Open message from notification in Unified Inbox if possible</change>
+        <change>Fixed stale message count for the Outbox folder</change>
+        <change>Fixed search field not working properly when using a hardware keyboard</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.908" versioncode="29008" date="2022-01-06">
+        <change>Fixed a bug where sometimes the app created notifications when downloading old messages</change>
+        <change>Fixed settings import so the imported theme is applied right away</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.907" versioncode="29007" date="2021-12-27">
+        <change>Added support for setting the notification vibration pattern on Android 8+</change>
+        <change>Added support for setting a custom notification light color on Android 8+</change>
+        <change>Fixed back button behavior when opening a single message from a notification</change>
+        <change>Improved behavior when clicking grouped notifications for new messages of an account</change>
+        <change>Hide sensitive information when sync and error notifications are displayed on the lock screen</change>
+        <change>The account color is now used for sync and error notifications</change>
+        <change>Hide notification vibration settings when there's no vibrator hardware</change>
+        <change>Fixed hotkey handling when using non-QWERTY keyboard layouts</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.906" versioncode="29006" date="2021-12-07">
+        <change>Set the auto-expand folder to 'Inbox' by default</change>
+        <change>Restore 'new mail' notifications when the app is restarted</change>
+        <change>Switched ringtone picker so custom notification sounds can be supported (Android 7 and older)</change>
+        <change>Fixed bug where vibration for notifications couldn't be disabled (Android 7 and older)</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.905" versioncode="29005" date="2021-11-24">
+        <change>Set subject when forwarding a message as attachment</change>
+        <change>Added a menu option to export the debug log under Settings → General settings → Debugging</change>
+        <change>Don't display "unread count" in notifications; only number of new messages</change>
+        <change>Properly decode multiple encoded words using the ISO-2022-JP charset (e.g. in subjects)</change>
+        <change>Fixed a crash when users left the message view screen before the download of an image attachment was complete</change>
+        <change>Don't crash when loading images without internet permission (could only happen with custom ROMs)</change>
+        <change>Fixed a rare crash when auto-completing email addresses in the compose screen</change>
+        <change>A lot of internal changes and cleanup</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.904" versioncode="29004" date="2021-10-05">
+        <change>Tweaked toolbar in move/copy screens</change>
+        <change>Fixed a bug where line breaks were added when editing a draft</change>
+        <change>Fixed animation when switching accounts</change>
+        <change>Fixed crash that could occur when deleting an account</change>
+        <change>Updated translations</change>
+    </release>
+    <release version="5.903" versioncode="29003" date="2021-09-28">
+        <change>Removed the "default account" setting; the first account in the list is now automatically the default account</change>
+        <change>Removed the "hide subject in notifications" setting; use the "lock screen notifications" setting instead</change>
+        <change>Fixed bug where the list of displayed folders wasn't updated when a folder was added or removed from the server</change>
+        <change>Fixed lock screen notification when there's only one new message</change>
+        <change>Fixed bug that lead to newly created accounts not having an account color</change>
+    </release>
+    <release version="5.902" versioncode="29002" date="2021-09-21">
+        <change>Fixed missing notification sound</change>
+    </release>
+    <release version="5.901" versioncode="29001" date="2021-09-17">
+        <change>Added support for entering Reply-To addresses when composing a message</change>
+        <change>Display the unread message count for the Unified Inbox in the drawer</change>
+        <change>Fixed crash when using the split-screen view</change>
+        <change>Hide notification category settings on Android versions that don't support them</change>
+        <change>Update the sync notification for an account instead of adding and removing it for each folder</change>
+        <change>A lot of internal changes to the notification code - please report any bugs or odd behavior you encounter</change>
+    </release>
+    <release version="5.900" versioncode="29000" date="2021-09-09">
+        <change>Experimental: Added a toolbar with a "check mail" button to the navigation drawer</change>
+        <change>Experimental: Tweaked the mark as unread toolbar icon</change>
+        <change>Don't show notifications for new messages when syncing a folder for the first time</change>
+        <change>Optionally show starred message count in navigation drawer</change>
+        <change>Require the user to authenticate before unmasking server passwords</change>
+        <change>Properly decode format=flowed body before including the text in a reply</change>
+        <change>Added a setting to suppress notifications for chat messages</change>
+        <change>Small change to the user interface for searching messages</change>
+        <change>Make sure attachment box isn't cut off on small screens</change>
+        <change>Updated translations</change>
+    </release>
     <release version="5.806" versioncode="28006" date="2021-08-30">
         <change>Fixed the check for missing outgoing server credentials, again… hopefully 🤞</change>
     </release>
